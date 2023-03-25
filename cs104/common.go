@@ -31,5 +31,5 @@ func openConnection(uri *url.URL, tlsc *tls.Config, timeout time.Duration) (net.
 	case "tcps":
 		return tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", uri.Host, tlsc)
 	}
-	return nil, errors.New("Unknown protocol")
+	return nil, errors.New("unknown protocol")
 }

@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
+	"github.com/riclolsen/go-iecp5/asdu"
+	"github.com/riclolsen/go-iecp5/clog"
 )
 
 const (
@@ -582,7 +582,7 @@ func (sf *Client) SendStopDt() {
 	sf.sendUFrame(uStopDtActive)
 }
 
-//InterrogationCmd wrap asdu.InterrogationCmd
+// InterrogationCmd wrap asdu.InterrogationCmd
 func (sf *Client) InterrogationCmd(coa asdu.CauseOfTransmission, ca asdu.CommonAddr, qoi asdu.QualifierOfInterrogation) error {
 	return asdu.InterrogationCmd(sf, coa, ca, qoi)
 }
