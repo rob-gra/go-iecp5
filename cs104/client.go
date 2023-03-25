@@ -26,9 +26,10 @@ const (
 
 // Client is an IEC104 master
 type Client struct {
-	option  ClientOption
-	conn    net.Conn
-	handler ClientHandlerInterface
+	option       ClientOption
+	conn         net.Conn
+	handler      ClientHandlerInterface
+	pairedServer *Server
 
 	// channel
 	rcvASDU  chan []byte // for received asdu
@@ -503,6 +504,7 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 	}()
 
 	sf.Debug("ASDU %+v", asduPack)
+	sf.handler.ASDUHandlerAll(sf, asduPack, sf.pairedServer)
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd
@@ -615,4 +617,9 @@ func (sf *Client) DelayAcquireCommand(coa asdu.CauseOfTransmission, ca asdu.Comm
 // TestCommand  wrap asdu.TestCommand
 func (sf *Client) TestCommand(coa asdu.CauseOfTransmission, ca asdu.CommonAddr) error {
 	return asdu.TestCommand(sf, coa, ca)
+}
+
+// Allow to specify a paired server (e.g. for AL data forwarding)
+func (sf *Client) SetPairedServer(s *Server) {
+	sf.pairedServer = s
 }
