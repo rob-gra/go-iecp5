@@ -147,7 +147,7 @@ func (sf *Client) running() {
 		case <-ctx.Done():
 			return
 		default:
-			// 随机500ms-1s的重试，避免快速重试造成服务器许多无效连接
+			// Random 500ms-1s retry to avoid fast retry causing many invalid connections to the server
 			time.Sleep(time.Millisecond * time.Duration(500+rand.Intn(500)))
 		}
 	}
