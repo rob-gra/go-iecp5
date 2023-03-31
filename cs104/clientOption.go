@@ -13,14 +13,14 @@ import (
 	"github.com/riclolsen/go-iecp5/asdu"
 )
 
-// ClientOption 客户端配置
+// ClientOption client configuration
 type ClientOption struct {
 	config            Config
 	params            asdu.Params
-	server            *url.URL      // 连接的服务器端
-	autoReconnect     bool          // 是否启动重连
-	reconnectInterval time.Duration // 重连间隔时间
-	TLSConfig         *tls.Config   // tls配置
+	server            *url.URL      // server side of the connection
+	autoReconnect     bool          // Whether to start reconnection
+	reconnectInterval time.Duration // reconnection interval
+	TLSConfig         *tls.Config   // tls configuration
 }
 
 // NewOption with default config and default asdu.ParamsWide params

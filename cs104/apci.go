@@ -26,17 +26,17 @@ const (
 	APDUFieldSizeMax = APCICtlFiledSize + asdu.ASDUSizeMax // control field(4) + ASDU
 )
 
-// U帧 控制域功能
+// U frame control domain function
 const (
-	uStartDtActive  byte = 4 << iota // 启动激活 0x04
-	uStartDtConfirm                  // 启动确认 0x08
-	uStopDtActive                    // 停止激活 0x10
-	uStopDtConfirm                   // 停止确认 0x20
-	uTestFrActive                    // 测试激活 0x40
-	uTestFrConfirm                   // 测试确认 0x80
+	uStartDtActive  byte = 4 << iota // start activation 0x04
+	uStartDtConfirm                  // start confirmation 0x08
+	uStopDtActive                    // deactivate 0x10
+	uStopDtConfirm                   // stop confirmation 0x20
+	uTestFrActive                    // test activation 0x40
+	uTestFrConfirm                   // test confirmation 0x80
 )
 
-// I帧 含apci和asdu 信息帧.用于编号的信息传输 information
+// I frame contains apci and asdu information frame. Used for numbered information transmission
 type iAPCI struct {
 	sendSN, rcvSN uint16
 }
@@ -45,7 +45,7 @@ func (sf iAPCI) String() string {
 	return fmt.Sprintf("I[sendNO: %d, recvNO: %d]", sf.sendSN, sf.rcvSN)
 }
 
-// S帧 只含apci S帧用于主要用确认帧的正确传输,协议称是监视. supervisory
+// S frame only contains the apci S frame for the correct transmission of the main confirmation frame, the protocol is called monitoring. supervisory
 type sAPCI struct {
 	rcvSN uint16
 }
@@ -54,9 +54,9 @@ func (sf sAPCI) String() string {
 	return fmt.Sprintf("S[recvNO: %d]", sf.rcvSN)
 }
 
-// U帧 只含apci 未编号控制信息 unnumbered
+// U frame contains only apci unnumbered control information unnumbered
 type uAPCI struct {
-	function byte // bit8 测试确认
+	function byte // bit8 test confirmation
 }
 
 func (sf uAPCI) String() string {
@@ -80,7 +80,7 @@ func (sf uAPCI) String() string {
 	return fmt.Sprintf("U[function: %s]", s)
 }
 
-// newIFrame 创建I帧 ,返回apdu
+// newIFrame creates an I frame and returns to apdu
 func newIFrame(sendSN, RcvSN uint16, asdus []byte) ([]byte, error) {
 	if len(asdus) > asdu.ASDUSizeMax {
 		return nil, fmt.Errorf("ASDU filed large than max %d", asdu.ASDUSizeMax)
@@ -99,20 +99,20 @@ func newIFrame(sendSN, RcvSN uint16, asdus []byte) ([]byte, error) {
 	return b, nil
 }
 
-// newSFrame 创建S帧,返回apdu
+// newSFrame creates an S frame and returns to apdu
 func newSFrame(RcvSN uint16) []byte {
 	return []byte{startFrame, 4, 0x01, 0x00, byte(RcvSN << 1), byte(RcvSN >> 7)}
 }
 
-// newUFrame 创建U帧,返回apdu
+// newUFrame creates a U frame and returns apdu
 func newUFrame(which byte) []byte {
 	return []byte{startFrame, 4, which | 0x03, 0x00, 0x00, 0x00}
 }
 
-// APCI apci 应用规约控制信息
+// APCI apci Application Protocol Control Information
 type APCI struct {
 	start                  byte
-	apduFiledLen           byte // control + asdu 的长度
+	apduFiledLen           byte // control + asdu length
 	ctr1, ctr2, ctr3, ctr4 byte
 }
 

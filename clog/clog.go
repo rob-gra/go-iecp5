@@ -18,14 +18,14 @@ type LogProvider interface {
 	Debug(format string, v ...interface{})
 }
 
-// Clog 日志内部调试实现
+// Clog Log internal debugging implementation
 type Clog struct {
 	provider LogProvider
 	// is log output enabled,1: enable, 0: disable
 	has uint32
 }
 
-// NewLogger 创建一个新的日志，采用指定prefix前缀
+// NewLogger Create a new log with the specified prefix
 func NewLogger(prefix string) Clog {
 	return Clog{
 		defaultLogger{

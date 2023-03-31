@@ -174,9 +174,9 @@ func (sf *SrvSession) run(ctx context.Context) {
 	var willNotTimeout = time.Now().Add(time.Hour * 24 * 365 * 100)
 
 	var unAckRcvSince = willNotTimeout
-	var idleTimeout3Sine = time.Now()         // 空闲间隔发起testFrAlive
-	var testFrAliveSendSince = willNotTimeout // 当发起testFrAlive时,等待确认回复的超时间隔
-	// 对于server端，无需对应的U-Frame 无需判断
+	var idleTimeout3Sine = time.Now()         // Initiate testFrAlive in idle interval
+	var testFrAliveSendSince = willNotTimeout // When testFrAlive is initiated, the timeout interval for waiting for a confirmation reply
+	// For the server side, there is no need for a corresponding U-Frame, no need to judge
 	// var startDtActiveSendSince = willNotTimeout
 	// var stopDtActiveSendSince = willNotTimeout
 
@@ -209,7 +209,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 	defer func() {
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
-		_ = sf.conn.Close() // 连锁引发cancel
+		_ = sf.conn.Close() // chain trigger cancel
 		sf.wg.Wait()
 		if sf.connectionLost != nil {
 			sf.connectionLost(sf)
@@ -249,7 +249,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 				return
 			}
 
-			// 确定最早发送的i-Frame是否超时,超时则回复sFrame
+			// Determine whether the earliest i-Frame sent has timed out, and will reply sFrame when timed out
 			if sf.ackNoRcv != sf.seqNoRcv &&
 				(now.Sub(unAckRcvSince) >= sf.config.RecvUnAckTimeout2 ||
 					now.Sub(idleTimeout3Sine) >= timeoutResolution) {
@@ -257,7 +257,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 				sf.ackNoRcv = sf.seqNoRcv
 			}
 
-			// 空闲时间到，发送TestFrActive帧,保活
+			// When the idle time is up, send a TestFrActive frame to keep alive
 			if now.Sub(idleTimeout3Sine) >= sf.config.IdleTimeout3 {
 				sendUFrame(uTestFrActive)
 				testFrAliveSendSince = time.Now()
@@ -265,7 +265,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 			}
 
 		case apdu := <-sf.rcvRaw:
-			idleTimeout3Sine = time.Now() // 每收到一个i帧,S帧,U帧, 重置空闲定时器, t3
+			idleTimeout3Sine = time.Now() // Every time an i frame, S frame, U frame is received, the idle timer is reset, t3
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:

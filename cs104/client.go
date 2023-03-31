@@ -38,7 +38,7 @@ type Client struct {
 	rcvRaw   chan []byte // for recvLoop raw cs104 frame
 	sendRaw  chan []byte // for sendLoop raw cs104 frame
 
-	// I帧的发送与接收序号
+	// I frame send and receive sequence number
 	seqNoSend uint16 // sequence number of next outbound I-frame
 	ackNoSend uint16 // outbound sequence number yet to be confirmed
 	seqNoRcv  uint16 // sequence number of next inbound I-frame
@@ -47,15 +47,15 @@ type Client struct {
 	// maps sendTime I-frames to their respective sequence number
 	pending []seqPending
 
-	startDtActiveSendSince atomic.Value // 当发送startDtActive时,等待确认回复的超时间隔
-	stopDtActiveSendSince  atomic.Value // 当发起stopDtActive时,等待确认回复的超时
+	startDtActiveSendSince atomic.Value // The timeout interval to wait for an acknowledgment reply when sending startDtActive
+	stopDtActiveSendSince  atomic.Value // Timeout waiting for confirmation reply when stopDtActive is initiated
 
-	// 连接状态
+	// Connection Status
 	status   uint32
 	rwMux    sync.RWMutex
 	isActive uint32
 
-	// 其他
+	// other
 	clog.Clog
 
 	wg          sync.WaitGroup
@@ -263,8 +263,8 @@ func (sf *Client) run(ctx context.Context) {
 	var willNotTimeout = time.Now().Add(time.Hour * 24 * 365 * 100)
 
 	var unAckRcvSince = willNotTimeout
-	var idleTimeout3Sine = time.Now()         // 空闲间隔发起testFrAlive
-	var testFrAliveSendSince = willNotTimeout // 当发起testFrAlive时,等待确认回复的超时间隔
+	var idleTimeout3Sine = time.Now()         // idle interval initiated testFrAlive
+	var testFrAliveSendSince = willNotTimeout // When testFrAlive is initiated, the timeout interval for waiting for a confirmation reply
 
 	sf.startDtActiveSendSince.Store(willNotTimeout)
 	sf.stopDtActiveSendSince.Store(willNotTimeout)
@@ -294,7 +294,7 @@ func (sf *Client) run(ctx context.Context) {
 		atomic.StoreUint32(&sf.isActive, inactive)
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
-		_ = sf.conn.Close() // 连锁引发cancel
+		_ = sf.conn.Close() // chain trigger cancel
 		sf.wg.Wait()
 		sf.onConnectionLost(sf)
 		sf.Debug("run stopped!")
@@ -333,7 +333,7 @@ func (sf *Client) run(ctx context.Context) {
 				return
 			}
 
-			// 确定最早发送的i-Frame是否超时,超时则回复sFrame
+			// Determine whether the earliest i-Frame sent has timed out, and will reply sFrame when timed out
 			if sf.ackNoRcv != sf.seqNoRcv &&
 				(now.Sub(unAckRcvSince) >= sf.option.config.RecvUnAckTimeout2 ||
 					now.Sub(idleTimeout3Sine) >= timeoutResolution) {
@@ -341,7 +341,7 @@ func (sf *Client) run(ctx context.Context) {
 				sf.ackNoRcv = sf.seqNoRcv
 			}
 
-			// 空闲时间到，发送TestFrActive帧,保活
+			// When the idle time is up, send a TestFrActive frame to keep alive
 			if now.Sub(idleTimeout3Sine) >= sf.option.config.IdleTimeout3 {
 				sf.sendUFrame(uTestFrActive)
 				testFrAliveSendSince = time.Now()
@@ -349,7 +349,7 @@ func (sf *Client) run(ctx context.Context) {
 			}
 
 		case apdu := <-sf.rcvRaw:
-			idleTimeout3Sine = time.Now() // 每收到一个i帧,S帧,U帧, 重置空闲定时器, t3
+			idleTimeout3Sine = time.Now() // Every time an i frame, S frame, U frame is received, the idle timer is reset, t3
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:
@@ -474,7 +474,7 @@ func (sf *Client) updateAckNoOut(ackNo uint16) (ok bool) {
 	if ackNo == sf.ackNoSend {
 		return true
 	}
-	// new acks validate， ack 不能在 req seq 前面,出错
+	// new acks validate, ack cannot be in front of req seq, error
 	if seqNoCount(sf.ackNoSend, sf.seqNoSend) < seqNoCount(ackNo, sf.seqNoSend) {
 		return false
 	}
