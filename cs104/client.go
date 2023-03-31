@@ -30,6 +30,7 @@ type Client struct {
 	conn         net.Conn
 	handler      ClientHandlerInterface
 	pairedServer *Server
+	clientNumber int
 
 	// channel
 	rcvASDU  chan []byte // for received asdu
@@ -504,7 +505,7 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 	}()
 
 	sf.Debug("ASDU %+v", asduPack)
-	sf.handler.ASDUHandlerAll(sf, asduPack, sf.pairedServer)
+	sf.handler.ASDUHandlerAll(sf, asduPack, sf.pairedServer, sf.clientNumber)
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd
@@ -622,4 +623,8 @@ func (sf *Client) TestCommand(coa asdu.CauseOfTransmission, ca asdu.CommonAddr) 
 // Allow to specify a paired server (e.g. for AL data forwarding)
 func (sf *Client) SetPairedServer(s *Server) {
 	sf.pairedServer = s
+}
+
+func (sf *Client) SetClientNumber(n int) {
+	sf.clientNumber = n
 }
