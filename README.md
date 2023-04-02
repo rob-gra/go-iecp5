@@ -1,10 +1,8 @@
-# go-iecp5(Archived)
-## NOTE: Archived, not maintain. 
-## NOTE: 已归档, 不再维护, 放弃License. 有需要的可以自由分发
+# go-iecp5 Forked from thinkgos/go-iecp5(Archived)
+## NOTE: Original project Archived, not maintained. 
 
 go-iecp5 library for IEC 60870-5 based protocols in pure go.
-The current implementation contains code for IEC 60870-5-104 (protocool over TCP/IP) specifications.
-
+The current implementation contains code for IEC 60870-5-104 (protocol over TCP/IP) specifications.
 
 
 [![Go.Dev reference](https://img.shields.io/badge/go.dev-reference-blue?logo=go&logoColor=white)](https://pkg.go.dev/github.com/thinkgos/go-iecp5?tab=doc)
@@ -33,10 +31,5 @@ lib60870 c library doc [lib60870 doc](https://support.mz-automation.de/doc/lib60
 
 if package help you a lot,you can support us by:
 
-**Alipay**
+See original project help links ![here](https://github.com/thinkgos/go-iecp5)
 
-![alipay](https://github.com/thinkgos/thinkgos/blob/master/asserts/alipay.jpg)
-
-**WeChat Pay**
-
-![wxpay](https://github.com/thinkgos/thinkgos/blob/master/asserts/wxpay.jpg)
