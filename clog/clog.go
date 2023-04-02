@@ -29,7 +29,7 @@ type Clog struct {
 func NewLogger(prefix string) Clog {
 	return Clog{
 		defaultLogger{
-			log.New(os.Stdout, prefix, log.LstdFlags),
+			log.New(os.Stdout, prefix, log.LstdFlags|log.Lmicroseconds),
 		},
 		0,
 	}
