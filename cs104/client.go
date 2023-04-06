@@ -505,7 +505,6 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 	}()
 
 	sf.Debug("ASDU %+v", asduPack)
-	sf.handler.ASDUHandlerAll(sf, asduPack, sf.pairedServer, sf.clientNumber)
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd
@@ -530,7 +529,7 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 		return sf.handler.DelayAcquisitionHandler(sf, asduPack)
 	}
 
-	return sf.handler.ASDUHandler(sf, asduPack)
+	return sf.handler.ASDUHandler(sf, asduPack, sf.pairedServer, sf.clientNumber)
 }
 
 // Params returns params of client
