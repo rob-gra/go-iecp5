@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -70,7 +71,8 @@ func (sf *Server) SetParams(p *asdu.Params) *Server {
 func (sf *Server) ListenAndServer(addr string) {
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
-		sf.Error("server run failed, %v", err)
+		sf.Critical("server run failed, %v", err)
+		os.Exit(1)
 		return
 	}
 	sf.mux.Lock()
@@ -87,7 +89,8 @@ func (sf *Server) ListenAndServer(addr string) {
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
-			sf.Error("server run failed, %v", err)
+			sf.Critical("server run failed, %v", err)
+			os.Exit(1)
 			return
 		}
 
