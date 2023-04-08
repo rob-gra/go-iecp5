@@ -382,7 +382,7 @@ loop:
 	}
 }
 
-// 回绕机制
+// rewind mechanism
 func seqNoCount(nextAckNo, nextSeqNo uint16) uint16 {
 	if nextAckNo > nextSeqNo {
 		nextSeqNo += 32768
@@ -394,7 +394,7 @@ func (sf *SrvSession) updateAckNoOut(ackNo uint16) (ok bool) {
 	if ackNo == sf.ackNoSend {
 		return true
 	}
-	// new acks validate， ack 不能在 req seq 前面,出错
+	// new acks validate， ack not in req seq front, error
 	if seqNoCount(sf.ackNoSend, sf.seqNoSend) < seqNoCount(ackNo, sf.seqNoSend) {
 		return false
 	}
