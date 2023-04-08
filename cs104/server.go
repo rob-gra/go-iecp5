@@ -166,3 +166,8 @@ func (sf *Server) SetOnConnectionHandler(f func(asdu.Connect)) {
 func (sf *Server) SetConnectionLostHandler(f func(asdu.Connect)) {
 	sf.connectionLost = f
 }
+
+// Get the number of sessions
+func (sf *Server) GetSessionsLen() int {
+	return len(sf.sessions)
+}
