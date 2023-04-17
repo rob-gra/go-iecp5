@@ -10,7 +10,7 @@ import (
 	"github.com/riclolsen/go-iecp5/asdu"
 )
 
-const startFrame byte = 0x68 // 启动字符
+const startFrame byte = 0x68 // start character
 
 // APDU form Max size 255
 //
