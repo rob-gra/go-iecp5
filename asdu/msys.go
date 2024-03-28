@@ -36,3 +36,45 @@ func EndOfInitialization(c Connect, coa CauseOfTransmission, ca CommonAddr, ioa 
 func (sf *ASDU) GetEndOfInitialization() (InfoObjAddr, CauseOfInitial) {
 	return sf.DecodeInfoObjAddr(), ParseCauseOfInitial(sf.infoObj[0])
 }
+
+func InterrogationConfirmation(c Connect, coa CauseOfTransmission, ca CommonAddr, ioa InfoObjAddr, coi CauseOfInitial) error {
+	if err := c.Params().Valid(); err != nil {
+		return err
+	}
+
+	coa.Cause = ActivationCon
+	u := NewASDU(c.Params(), Identifier{
+		C_IC_NA_1,
+		VariableStruct{IsSequence: false, Number: 1},
+		coa,
+		0,
+		ca,
+	})
+
+	if err := u.AppendInfoObjAddr(ioa); err != nil {
+		return err
+	}
+	u.AppendBytes(coi.Value())
+	return c.Send(u)
+}
+
+func InterrogationTermination(c Connect, coa CauseOfTransmission, ca CommonAddr, ioa InfoObjAddr, coi CauseOfInitial) error {
+	if err := c.Params().Valid(); err != nil {
+		return err
+	}
+
+	coa.Cause = ActivationTerm
+	u := NewASDU(c.Params(), Identifier{
+		C_IC_NA_1,
+		VariableStruct{IsSequence: false, Number: 1},
+		coa,
+		0,
+		ca,
+	})
+
+	if err := u.AppendInfoObjAddr(ioa); err != nil {
+		return err
+	}
+	u.AppendBytes(coi.Value())
+	return c.Send(u)
+}
