@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riclolsen/go-iecp5/asdu"
-	"github.com/riclolsen/go-iecp5/clog"
+	"github.com/rob-gra/go-iecp5/asdu"
+	"github.com/rob-gra/go-iecp5/clog"
 )
 
 // timeoutResolution is seconds according to companion standard 104,
