@@ -529,7 +529,7 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 		return sf.handler.DelayAcquisitionHandler(sf, asduPack)
 	}
 
-	return sf.handler.ASDUHandler(sf, asduPack, sf.pairedServer, sf.clientNumber)
+	return sf.handler.ASDUHandlerAll(sf, asduPack, sf.pairedServer, sf.clientNumber)
 }
 
 // Params returns params of client
