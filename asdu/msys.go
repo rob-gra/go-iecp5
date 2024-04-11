@@ -42,7 +42,6 @@ func InterrogationConfirmation(c Connect, coa CauseOfTransmission, ca CommonAddr
 		return err
 	}
 
-	coa.Cause = ActivationCon
 	u := NewASDU(c.Params(), Identifier{
 		C_IC_NA_1,
 		VariableStruct{IsSequence: false, Number: 1},
@@ -63,7 +62,6 @@ func InterrogationTermination(c Connect, coa CauseOfTransmission, ca CommonAddr,
 		return err
 	}
 
-	coa.Cause = ActivationTerm
 	u := NewASDU(c.Params(), Identifier{
 		C_IC_NA_1,
 		VariableStruct{IsSequence: false, Number: 1},
