@@ -20,6 +20,51 @@ type seqPending struct {
 	sendTime time.Time
 }
 
+// seqNoModulus is the wraparound modulus of the 15-bit I-frame sequence
+// number space, see IEC 60870-5-104, subclass 5.5.
+const seqNoModulus = 1 << 15
+
+// 回绕机制, returns the count of sequence numbers between nextAckNo(inclusive)
+// and nextSeqNo(exclusive), accounting for wraparound of the 15-bit sequence
+// number space.
+func seqNoCount(nextAckNo, nextSeqNo uint16) uint16 {
+	if nextAckNo > nextSeqNo {
+		nextSeqNo += seqNoModulus
+	}
+	return nextSeqNo - nextAckNo
+}
+
+// prevSeqNo returns (seq-1) mod 32768, the sequence number immediately
+// preceding seq in the 15-bit I-frame sequence space. A plain "seq-1"
+// underflows when seq is 0, since seq is stored in a 16-bit integer.
+func prevSeqNo(seq uint16) uint16 {
+	return (seq - 1) & (seqNoModulus - 1)
+}
+
+// confirmSeqNo validates an incoming ack (rcvSN) against the outstanding
+// pending queue of sent I-frames identified by ackNoSend..seqNoSend. If
+// ackNo is valid, it returns the pending queue trimmed of every entry the
+// ack confirms; otherwise it returns pending unchanged and ok false.
+func confirmSeqNo(pending []seqPending, ackNoSend, seqNoSend, ackNo uint16) (_ []seqPending, ok bool) {
+	if ackNo == ackNoSend {
+		return pending, true
+	}
+	// new acks validate, ack 不能在 req seq 前面,出错
+	if seqNoCount(ackNoSend, seqNoSend) < seqNoCount(ackNo, seqNoSend) {
+		return pending, false
+	}
+
+	// confirm reception
+	want := prevSeqNo(ackNo)
+	for i, v := range pending {
+		if v.seq == want {
+			pending = pending[i+1:]
+			break
+		}
+	}
+	return pending, true
+}
+
 func openConnection(uri *url.URL, tlsc *tls.Config, timeout time.Duration) (net.Conn, error) {
 	switch uri.Scheme {
 	case "tcp":

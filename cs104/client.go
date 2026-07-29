@@ -137,8 +137,7 @@ func (sf *Client) running() {
 			continue
 		}
 		sf.Debug("connect success")
-		sf.conn = conn
-		sf.run(ctx)
+		sf.run(ctx, conn)
 
 		sf.Debug("disconnected server %+v", sf.option.server)
 		select {
@@ -151,7 +150,7 @@ func (sf *Client) running() {
 	}
 }
 
-func (sf *Client) recvLoop() {
+func (sf *Client) recvLoop(conn net.Conn) {
 	sf.Debug("recvLoop started")
 	defer func() {
 		sf.cancel()
@@ -162,7 +161,7 @@ func (sf *Client) recvLoop() {
 	for {
 		rawData := make([]byte, APDUSizeMax)
 		for rdCnt, length := 0, 2; rdCnt < length; {
-			byteCount, err := io.ReadFull(sf.conn, rawData[rdCnt:length])
+			byteCount, err := io.ReadFull(conn, rawData[rdCnt:length])
 			if err != nil {
 				// See: https://github.com/golang/go/issues/4373
 				if err != io.EOF && err != io.ErrClosedPipe ||
@@ -208,7 +207,7 @@ func (sf *Client) recvLoop() {
 	}
 }
 
-func (sf *Client) sendLoop() {
+func (sf *Client) sendLoop(conn net.Conn) {
 	sf.Debug("sendLoop started")
 	defer func() {
 		sf.cancel()
@@ -222,7 +221,7 @@ func (sf *Client) sendLoop() {
 		case apdu := <-sf.sendRaw:
 			sf.Debug("TX Raw[% x]", apdu)
 			for wrCnt := 0; len(apdu) > wrCnt; {
-				byteCount, err := sf.conn.Write(apdu[wrCnt:])
+				byteCount, err := conn.Write(apdu[wrCnt:])
 				if err != nil {
 					// See: https://github.com/golang/go/issues/4373
 					if err != io.EOF && err != io.ErrClosedPipe ||
@@ -243,16 +242,17 @@ func (sf *Client) sendLoop() {
 }
 
 // run is the big fat state machine.
-func (sf *Client) run(ctx context.Context) {
+func (sf *Client) run(ctx context.Context, conn net.Conn) {
 	sf.Debug("run started!")
 	// before any thing make sure init
 	sf.cleanUp()
+	sf.setConn(conn)
 
 	sf.ctx, sf.cancel = context.WithCancel(ctx)
 	sf.setConnectStatus(connected)
 	sf.wg.Add(3)
-	go sf.recvLoop()
-	go sf.sendLoop()
+	go sf.recvLoop(conn)
+	go sf.sendLoop(conn)
 	go sf.handlerLoop()
 
 	var checkTicker = time.NewTicker(timeoutResolution)
@@ -292,7 +292,7 @@ func (sf *Client) run(ctx context.Context) {
 		atomic.StoreUint32(&sf.isActive, inactive)
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
-		_ = sf.conn.Close() // 连锁引发cancel
+		_ = conn.Close() // 连锁引发cancel
 		sf.wg.Wait()
 		sf.onConnectionLost(sf)
 		sf.Debug("run stopped!")
@@ -443,6 +443,21 @@ func (sf *Client) connectStatus() uint32 {
 	return status
 }
 
+// setConn stores conn for UnderlyingConn to read. The client rebinds to a
+// new conn on every reconnect, so reads and writes must be synchronized.
+func (sf *Client) setConn(conn net.Conn) {
+	sf.rwMux.Lock()
+	sf.conn = conn
+	sf.rwMux.Unlock()
+}
+
+func (sf *Client) getConn() net.Conn {
+	sf.rwMux.RLock()
+	conn := sf.conn
+	sf.rwMux.RUnlock()
+	return conn
+}
+
 func (sf *Client) cleanUp() {
 	sf.ackNoRcv = 0
 	sf.ackNoSend = 0
@@ -469,22 +484,11 @@ func (sf *Client) sendUFrame(which byte) {
 }
 
 func (sf *Client) updateAckNoOut(ackNo uint16) (ok bool) {
-	if ackNo == sf.ackNoSend {
-		return true
-	}
-	// new acks validate， ack 不能在 req seq 前面,出错
-	if seqNoCount(sf.ackNoSend, sf.seqNoSend) < seqNoCount(ackNo, sf.seqNoSend) {
+	pending, ok := confirmSeqNo(sf.pending, sf.ackNoSend, sf.seqNoSend, ackNo)
+	if !ok {
 		return false
 	}
-
-	// confirm reception
-	for i, v := range sf.pending {
-		if v.seq == (ackNo - 1) {
-			sf.pending = sf.pending[i+1:]
-			break
-		}
-	}
-
+	sf.pending = pending
 	sf.ackNoSend = ackNo
 	return true
 }
@@ -557,7 +561,7 @@ func (sf *Client) Send(a *asdu.ASDU) error {
 
 // UnderlyingConn returns underlying conn of client
 func (sf *Client) UnderlyingConn() net.Conn {
-	return sf.conn
+	return sf.getConn()
 }
 
 // Close close all
