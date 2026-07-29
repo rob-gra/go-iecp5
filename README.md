@@ -25,6 +25,12 @@ cs104 package: [![GoDoc](https://godoc.org/github.com/thinkgos/go-iecp5/cs104?st
 - client/server for CS 104 TCP/IP communication
 - support for much application layer(except file object) message types,
 
+## Examples
+
+See [`_examples`](./_examples) for runnable master (`cs104.Client`), slave
+(`cs104.Server`), dial-out slave (`cs104.ServerSpecial`), and
+redundant-master server setups.
+
 # Reference
 lib60870 c library [lib60870](https://github.com/mz-automation/lib60870)  
 lib60870 c library doc [lib60870 doc](https://support.mz-automation.de/doc/lib60870/latest/group__CS104__MASTER.html)
