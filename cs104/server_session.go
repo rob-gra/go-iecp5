@@ -44,17 +44,48 @@ type SrvSession struct {
 	pending []seqPending
 	//seqManage
 
-	status uint32
-	rwMux  sync.RWMutex
+	status   uint32
+	isActive uint32 // atomic: active/inactive, see const block in client.go
+	rwMux    sync.RWMutex
 
 	clog.Clog
 
 	onConnection   func(asdu.Connect)
 	connectionLost func(asdu.Connect)
 
+	// onActivate, if set, is called (with no lock held) whenever this
+	// session transitions from inactive to active, i.e. it just confirmed
+	// STARTDT. Server uses it to enforce redundancy groups: see
+	// Server.handleSessionActivated.
+	onActivate func(*SrvSession)
+	// redundancyGroupKey groups this session together with other sessions
+	// sharing the same non-nil key: see Server.groupKeyFor. A nil key means
+	// this session isn't part of any redundancy group.
+	redundancyGroupKey interface{}
+	// closeCh, closed via closeOnce, forces this session to shut down, e.g.
+	// because it was superseded by another connection in its redundancy
+	// group. Safe to close from any goroutine.
+	closeCh   chan struct{}
+	closeOnce sync.Once
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 	ctx    context.Context
+}
+
+// IsActive reports whether the session has completed the STARTDT handshake
+// and not since sent/received STOPDT.
+func (sf *SrvSession) IsActive() bool {
+	return atomic.LoadUint32(&sf.isActive) == active
+}
+
+// forceClose asks the session to shut down, e.g. because it was superseded
+// by another connection in the same redundancy group. Safe to call multiple
+// times and from any goroutine.
+func (sf *SrvSession) forceClose() {
+	sf.closeOnce.Do(func() {
+		close(sf.closeCh)
+	})
 }
 
 // RecvLoop feeds t.rcvRaw.
@@ -168,7 +199,7 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 	go sf.handlerLoop()
 
 	// default: STOPDT, when connected establish and not enable "data transfer" yet
-	var isActive = false
+	atomic.StoreUint32(&sf.isActive, inactive)
 	var checkTicker = time.NewTicker(timeoutResolution)
 
 	// transmission timestamps for timeout calculation
@@ -219,7 +250,7 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 	}()
 
 	for {
-		if isActive && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
+		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
 			select {
 			case o := <-sf.sendASDU:
 				sendIFrame(o)
@@ -232,6 +263,9 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 		}
 		select {
 		case <-sf.ctx.Done():
+			return
+		case <-sf.closeCh:
+			sf.Debug("closing: superseded by another connection in the redundancy group")
 			return
 		case now := <-checkTicker.C:
 			// check all timeouts
@@ -278,7 +312,7 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 
 			case iAPCI:
 				sf.Debug("RX iFrame %v", head)
-				if !isActive {
+				if !sf.IsActive() {
 					sf.Warn("station not active")
 					break // not active, discard apdu
 				}
@@ -303,13 +337,15 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 				switch head.function {
 				case uStartDtActive:
 					sendUFrame(uStartDtConfirm)
-					isActive = true
+					if atomic.SwapUint32(&sf.isActive, active) != active && sf.onActivate != nil {
+						sf.onActivate(sf)
+					}
 				// case uStartDtConfirm:
 				// 	isActive = true
 				// 	startDtActiveSendSince = willNotTimeout
 				case uStopDtActive:
 					sendUFrame(uStopDtConfirm)
-					isActive = false
+					atomic.StoreUint32(&sf.isActive, inactive)
 				// case uStopDtConfirm:
 				// 	isActive = false
 				// 	stopDtActiveSendSince = willNotTimeout
@@ -386,6 +422,11 @@ func (sf *SrvSession) cleanUp() {
 	sf.seqNoRcv = 0
 	sf.seqNoSend = 0
 	sf.pending = nil
+	atomic.StoreUint32(&sf.isActive, inactive)
+	// ServerSpecial reuses this SrvSession across reconnects, so re-arm the
+	// force-close signal for the new connection's lifetime.
+	sf.closeOnce = sync.Once{}
+	sf.closeCh = make(chan struct{})
 	// clear sending chan buffer
 loop:
 	for {

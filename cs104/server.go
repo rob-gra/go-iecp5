@@ -22,15 +22,17 @@ const timeoutResolution = 100 * time.Millisecond
 
 // Server the common server
 type Server struct {
-	config         Config
-	params         asdu.Params
-	handler        ServerHandlerInterface
-	TLSConfig      *tls.Config
-	mux            sync.Mutex
-	sessions       map[*SrvSession]struct{}
-	listen         net.Listener
-	onConnection   func(asdu.Connect)
-	connectionLost func(asdu.Connect)
+	config           Config
+	params           asdu.Params
+	handler          ServerHandlerInterface
+	TLSConfig        *tls.Config
+	mux              sync.Mutex
+	sessions         map[*SrvSession]struct{}
+	listen           net.Listener
+	onConnection     func(asdu.Connect)
+	connectionLost   func(asdu.Connect)
+	serverMode       ServerMode
+	redundancyGroups []*RedundancyGroup
 	clog.Clog
 	wg sync.WaitGroup
 }
@@ -66,6 +68,43 @@ func (sf *Server) SetParams(p *asdu.Params) *Server {
 	return sf
 }
 
+// SetServerMode sets how connections are grouped for redundancy-group
+// enforcement (see ServerMode). Must be called before ListenAndServer.
+// Defaults to ModeConnectionIsRedundancyGroup, i.e. no grouping.
+func (sf *Server) SetServerMode(mode ServerMode) *Server {
+	sf.serverMode = mode
+	return sf
+}
+
+// AddRedundancyGroup registers a redundancy group for use with
+// ModeMultipleRedundancyGroups. Must be called before ListenAndServer.
+func (sf *Server) AddRedundancyGroup(rg *RedundancyGroup) *Server {
+	sf.redundancyGroups = append(sf.redundancyGroups, rg)
+	return sf
+}
+
+// newSession builds a SrvSession bound to conn, wired with this Server's
+// handlers and redundancy-group configuration. Split out from
+// ListenAndServer's accept loop so it can be driven directly in tests
+// without a real net.Listener.
+func (sf *Server) newSession(conn net.Conn) *SrvSession {
+	return &SrvSession{
+		config:   &sf.config,
+		params:   &sf.params,
+		handler:  sf.handler,
+		rcvASDU:  make(chan []byte, sf.config.RecvUnAckLimitW<<4),
+		sendASDU: make(chan []byte, sf.config.SendUnAckLimitK<<4),
+		rcvRaw:   make(chan []byte, sf.config.RecvUnAckLimitW<<5),
+		sendRaw:  make(chan []byte, sf.config.SendUnAckLimitK<<5), // may not block!
+
+		onConnection:       sf.onConnection,
+		connectionLost:     sf.connectionLost,
+		onActivate:         sf.handleSessionActivated,
+		redundancyGroupKey: sf.groupKeyFor(conn),
+		Clog:               sf.Clog,
+	}
+}
+
 // ListenAndServer run the server
 func (sf *Server) ListenAndServer(addr string) {
 	listen, err := net.Listen("tcp", addr)
@@ -93,19 +132,7 @@ func (sf *Server) ListenAndServer(addr string) {
 
 		sf.wg.Add(1)
 		go func() {
-			sess := &SrvSession{
-				config:   &sf.config,
-				params:   &sf.params,
-				handler:  sf.handler,
-				rcvASDU:  make(chan []byte, sf.config.RecvUnAckLimitW<<4),
-				sendASDU: make(chan []byte, sf.config.SendUnAckLimitK<<4),
-				rcvRaw:   make(chan []byte, sf.config.RecvUnAckLimitW<<5),
-				sendRaw:  make(chan []byte, sf.config.SendUnAckLimitK<<5), // may not block!
-
-				onConnection:   sf.onConnection,
-				connectionLost: sf.connectionLost,
-				Clog:           sf.Clog,
-			}
+			sess := sf.newSession(conn)
 			sf.mux.Lock()
 			sf.sessions[sess] = struct{}{}
 			sf.mux.Unlock()
