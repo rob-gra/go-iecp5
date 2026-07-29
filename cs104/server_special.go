@@ -107,8 +107,7 @@ func (sf *serverSpec) running() {
 			continue
 		}
 		sf.Debug("connect success")
-		sf.conn = conn
-		sf.run(ctx)
+		sf.run(ctx, conn)
 		sf.Debug("disconnected server %+v", sf.option.server)
 		select {
 		case <-ctx.Done():

@@ -97,7 +97,6 @@ func (sf *Server) ListenAndServer(addr string) {
 				config:   &sf.config,
 				params:   &sf.params,
 				handler:  sf.handler,
-				conn:     conn,
 				rcvASDU:  make(chan []byte, sf.config.RecvUnAckLimitW<<4),
 				sendASDU: make(chan []byte, sf.config.SendUnAckLimitK<<4),
 				rcvRaw:   make(chan []byte, sf.config.RecvUnAckLimitW<<5),
@@ -110,7 +109,7 @@ func (sf *Server) ListenAndServer(addr string) {
 			sf.mux.Lock()
 			sf.sessions[sess] = struct{}{}
 			sf.mux.Unlock()
-			sess.run(ctx)
+			sess.run(ctx, conn)
 			sf.mux.Lock()
 			delete(sf.sessions, sess)
 			sf.mux.Unlock()

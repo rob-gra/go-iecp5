@@ -58,7 +58,7 @@ type SrvSession struct {
 }
 
 // RecvLoop feeds t.rcvRaw.
-func (sf *SrvSession) recvLoop() {
+func (sf *SrvSession) recvLoop(conn net.Conn) {
 	sf.Debug("recvLoop started!")
 	defer func() {
 		sf.cancel()
@@ -69,7 +69,7 @@ func (sf *SrvSession) recvLoop() {
 	for {
 		rawData := make([]byte, APDUSizeMax)
 		for rdCnt, length := 0, 2; rdCnt < length; {
-			byteCount, err := io.ReadFull(sf.conn, rawData[rdCnt:length])
+			byteCount, err := io.ReadFull(conn, rawData[rdCnt:length])
 			if err != nil {
 				// See: https://github.com/golang/go/issues/4373
 				if err != io.EOF && err != io.ErrClosedPipe ||
@@ -118,7 +118,7 @@ func (sf *SrvSession) recvLoop() {
 }
 
 // sendLoop drains t.sendTime.
-func (sf *SrvSession) sendLoop() {
+func (sf *SrvSession) sendLoop(conn net.Conn) {
 	sf.Debug("sendLoop started!")
 	defer func() {
 		sf.cancel()
@@ -133,7 +133,7 @@ func (sf *SrvSession) sendLoop() {
 		case apdu := <-sf.sendRaw:
 			sf.Debug("TX Raw[% x]", apdu)
 			for wrCnt := 0; len(apdu) > wrCnt; {
-				byteCount, err := sf.conn.Write(apdu[wrCnt:])
+				byteCount, err := conn.Write(apdu[wrCnt:])
 				if err != nil {
 					// See: https://github.com/golang/go/issues/4373
 					if err != io.EOF && err != io.ErrClosedPipe ||
@@ -154,16 +154,17 @@ func (sf *SrvSession) sendLoop() {
 }
 
 // run is the big fat state machine.
-func (sf *SrvSession) run(ctx context.Context) {
+func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 	sf.Debug("run started!")
 	// before any thing make sure init
 	sf.cleanUp()
+	sf.setConn(conn)
 
 	sf.ctx, sf.cancel = context.WithCancel(ctx)
 	sf.setConnectStatus(connected)
 	sf.wg.Add(3)
-	go sf.recvLoop()
-	go sf.sendLoop()
+	go sf.recvLoop(conn)
+	go sf.sendLoop(conn)
 	go sf.handlerLoop()
 
 	// default: STOPDT, when connected establish and not enable "data transfer" yet
@@ -209,7 +210,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 	defer func() {
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
-		_ = sf.conn.Close() // 连锁引发cancel
+		_ = conn.Close() // 连锁引发cancel
 		sf.wg.Wait()
 		if sf.connectionLost != nil {
 			sf.connectionLost(sf)
@@ -362,6 +363,23 @@ func (sf *SrvSession) connectStatus() uint32 {
 	return status
 }
 
+// setConn stores conn for UnderlyingConn to read. SrvSession is normally
+// bound to a single conn for its whole lifetime, but ServerSpecial rebinds
+// the same SrvSession to a new conn on every reconnect, so reads and writes
+// must be synchronized.
+func (sf *SrvSession) setConn(conn net.Conn) {
+	sf.rwMux.Lock()
+	sf.conn = conn
+	sf.rwMux.Unlock()
+}
+
+func (sf *SrvSession) getConn() net.Conn {
+	sf.rwMux.RLock()
+	conn := sf.conn
+	sf.rwMux.RUnlock()
+	return conn
+}
+
 func (sf *SrvSession) cleanUp() {
 	sf.ackNoRcv = 0
 	sf.ackNoSend = 0
@@ -382,31 +400,12 @@ loop:
 	}
 }
 
-// 回绕机制
-func seqNoCount(nextAckNo, nextSeqNo uint16) uint16 {
-	if nextAckNo > nextSeqNo {
-		nextSeqNo += 32768
-	}
-	return nextSeqNo - nextAckNo
-}
-
 func (sf *SrvSession) updateAckNoOut(ackNo uint16) (ok bool) {
-	if ackNo == sf.ackNoSend {
-		return true
-	}
-	// new acks validate， ack 不能在 req seq 前面,出错
-	if seqNoCount(sf.ackNoSend, sf.seqNoSend) < seqNoCount(ackNo, sf.seqNoSend) {
+	pending, ok := confirmSeqNo(sf.pending, sf.ackNoSend, sf.seqNoSend, ackNo)
+	if !ok {
 		return false
 	}
-
-	// confirm reception
-	for i, v := range sf.pending {
-		if v.seq == (ackNo - 1) {
-			sf.pending = sf.pending[i+1:]
-			break
-		}
-	}
-
+	sf.pending = pending
 	sf.ackNoSend = ackNo
 	return true
 }
@@ -429,7 +428,9 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		ioa, qoi := asduPack.GetInterrogationCmd()
+		// decode on a clone: Get*Cmd consumes infoObj, and SendReplyMirror
+		// (here or in the handler) needs the original bytes intact to echo.
+		ioa, qoi := asduPack.Clone().GetInterrogationCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -442,7 +443,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		ioa, qcc := asduPack.GetCounterInterrogationCmd()
+		ioa, qcc := asduPack.Clone().GetCounterInterrogationCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -455,7 +456,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		return sf.handler.ReadHandler(sf, asduPack, asduPack.GetReadCmd())
+		return sf.handler.ReadHandler(sf, asduPack, asduPack.Clone().GetReadCmd())
 
 	case asdu.C_CS_NA_1: // ClockSynchronizationCmd
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
@@ -465,7 +466,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
 
-		ioa, tm := asduPack.GetClockSynchronizationCmd()
+		ioa, tm := asduPack.Clone().GetClockSynchronizationCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -478,7 +479,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		ioa, _ := asduPack.GetTestCommand()
+		ioa, _ := asduPack.Clone().GetTestCommand()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -491,7 +492,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		ioa, qrp := asduPack.GetResetProcessCmd()
+		ioa, qrp := asduPack.Clone().GetResetProcessCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -504,7 +505,7 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
-		ioa, msec := asduPack.GetDelayAcquireCommand()
+		ioa, msec := asduPack.Clone().GetDelayAcquireCommand()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
@@ -546,5 +547,5 @@ func (sf *SrvSession) Send(u *asdu.ASDU) error {
 
 // UnderlyingConn got under net.conn
 func (sf *SrvSession) UnderlyingConn() net.Conn {
-	return sf.conn
+	return sf.getConn()
 }
