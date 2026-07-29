@@ -6,7 +6,7 @@ entry is written as a standalone issue: summary, impact, and a suggested
 fix.
 
 - [ ] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering)
-- [ ] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server)
+- [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
 - [ ] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list)
 - [ ] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook)
 - [ ] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work)
@@ -69,6 +69,8 @@ There is no concept of a "redundancy group" or of deactivating one connection wh
 **Impact**: In a deployment with more than one master/client talking to the same server (e.g. a primary and a standby SCADA master), both connections receive every spontaneous update simultaneously instead of only the currently-active one. This diverges from the intended failover model where only one master should be receiving live data at a time.
 
 **Suggested fix**: Add an optional server mode that groups connections (e.g. by IP or an explicit group registration) and, on STARTDT_ACT from one connection in a group, closes/deactivates any other already-active connection in that group — mirroring the "single active master" semantics the protocol is designed around.
+
+**Status: implemented.** `Server.SetServerMode` selects one of `ModeConnectionIsRedundancyGroup` (default, unchanged behavior), `ModeSingleRedundancyGroup` (every connection to the server is one group), or `ModeMultipleRedundancyGroups` (connections grouped by peer IP via `Server.AddRedundancyGroup`/`NewRedundancyGroup`/`RedundancyGroup.AddAllowedClient`). When a session completes STARTDT and belongs to a group, any other still-active session in the same group is force-closed (`cs104/redundancy.go`, `SrvSession.forceClose`/`IsActive`). `Server.Send()` still broadcasts to every currently connected session — that part of this issue is intentionally left as-is, since with redundancy grouping enabled the non-active peers in a group are no longer connected at all.
 
 ---
 
