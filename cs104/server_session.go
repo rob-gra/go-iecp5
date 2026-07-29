@@ -30,10 +30,16 @@ type SrvSession struct {
 	conn    net.Conn
 	handler ServerHandlerInterface
 
-	rcvASDU  chan []byte // for received asdu
-	sendASDU chan []byte // for send asdu
-	rcvRaw   chan []byte // for recvLoop raw cs104 frame
-	sendRaw  chan []byte // for sendLoop raw cs104 frame
+	rcvASDU chan []byte // for received asdu
+	rcvRaw  chan []byte // for recvLoop raw cs104 frame
+	sendRaw chan []byte // for sendLoop raw cs104 frame
+
+	// sendQueue holds outbound ASDU payloads awaiting transmission. Unlike
+	// the channels above, it isn't cleared on cleanUp: ServerSpecial reuses
+	// it across reconnects, and Server hands it off between sessions in the
+	// same redundancy group (see handleSessionActivated), so a superseded
+	// or reconnecting session doesn't lose whatever it hadn't sent yet.
+	sendQueue *messageQueue
 
 	// see subclass 5.1 — Protection against loss and duplication of messages
 	seqNoSend uint16 // sequence number of next outbound I-frame
@@ -251,14 +257,10 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 
 	for {
 		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
-			select {
-			case o := <-sf.sendASDU:
+			if o, ok := sf.sendQueue.Pop(); ok {
 				sendIFrame(o)
 				idleTimeout3Sine = time.Now()
 				continue
-			case <-sf.ctx.Done():
-				return
-			default: // make no block
 			}
 		}
 		select {
@@ -267,6 +269,8 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 		case <-sf.closeCh:
 			sf.Debug("closing: superseded by another connection in the redundancy group")
 			return
+		case <-sf.sendQueue.Ready():
+			continue
 		case now := <-checkTicker.C:
 			// check all timeouts
 			if now.Sub(testFrAliveSendSince) >= sf.config.SendUnAckTimeout1 {
@@ -427,14 +431,16 @@ func (sf *SrvSession) cleanUp() {
 	// force-close signal for the new connection's lifetime.
 	sf.closeOnce = sync.Once{}
 	sf.closeCh = make(chan struct{})
-	// clear sending chan buffer
+	// clear the raw-frame and inbound-ASDU buffers: they're tied to the
+	// sequence-number state of the connection that just ended, so replaying
+	// them makes no sense. sendQueue is deliberately left untouched, so
+	// outbound messages the caller queued survive the reconnect.
 loop:
 	for {
 		select {
 		case <-sf.sendRaw:
 		case <-sf.rcvRaw:
 		case <-sf.rcvASDU:
-		case <-sf.sendASDU:
 		default:
 			break loop
 		}
@@ -578,10 +584,8 @@ func (sf *SrvSession) Send(u *asdu.ASDU) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case sf.sendASDU <- data:
-	default:
-		return ErrBufferFulled
+	if sf.sendQueue.Push(data) {
+		sf.Warn("send queue full, dropped the oldest unsent message")
 	}
 	return nil
 }

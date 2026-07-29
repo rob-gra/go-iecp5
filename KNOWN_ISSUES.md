@@ -5,7 +5,7 @@ are disabled on this repository, so these are recorded here instead. Each
 entry is written as a standalone issue: summary, impact, and a suggested
 fix.
 
-- [ ] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering)
+- [x] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering) — implemented: `messageQueue` (`cs104/queue.go`)
 - [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
 - [ ] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list)
 - [ ] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook)
@@ -45,6 +45,8 @@ There is no real message queue behind this: the channel's capacity is a fixed mu
 **Impact**: Any burst of spontaneous data (events, measured values, etc.) that exceeds the channel capacity is silently lost rather than buffered — the caller gets an error, but there's no queue to retry from, no eviction-of-oldest policy, and nothing is preserved across a reconnect. For a protocol whose whole point is reliable delivery of process data, losing data under load or during a brief disconnect is a significant reliability gap.
 
 **Suggested fix**: Introduce an actual bounded queue (e.g. a ring buffer that evicts the oldest entry when full instead of rejecting the newest, or a persistent/replayable queue) between `Send()` and the low-level `sendRaw` transmission, so callers don't need to hand-roll retry/backoff logic around `ErrBufferFulled`, and so data isn't lost purely because of a transient burst or reconnect.
+
+**Status: implemented.** `Client` and `SrvSession` now queue outbound ASDUs in a `messageQueue` (`cs104/queue.go`): a mutex-protected, bounded FIFO that evicts the oldest entry on overflow instead of rejecting the newest (`Send()` no longer returns `ErrBufferFulled`; it logs a warning via the existing `clog` debug logging when an eviction happens). Unlike the old channel, `cleanUp()` no longer drains it, so a message queued but not yet transmitted survives a `Client`/`ServerSpecial` reconnect. On the `Server` side, where a reconnecting peer gets a brand-new `SrvSession` object, `handleSessionActivated` now drains a superseded session's queue into the newly active one in the same redundancy group before closing it, so a connection closed by redundancy-group failover doesn't lose whatever it hadn't sent yet. `ErrBufferFulled` is kept declared (in `cs104/error.go`) for source compatibility, but this package no longer produces it.
 
 ---
 

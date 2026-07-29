@@ -45,10 +45,10 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 			params:  &o.params,
 			handler: handler,
 
-			rcvASDU:  make(chan []byte, 1024),
-			sendASDU: make(chan []byte, 1024),
-			rcvRaw:   make(chan []byte, 1024),
-			sendRaw:  make(chan []byte, 1024), // may not block!
+			rcvASDU:   make(chan []byte, 1024),
+			sendQueue: newMessageQueue(1024),
+			rcvRaw:    make(chan []byte, 1024),
+			sendRaw:   make(chan []byte, 1024), // may not block!
 
 			Clog: clog.NewLogger("cs104 serverSpec => "),
 		},

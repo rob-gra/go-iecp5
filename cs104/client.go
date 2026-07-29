@@ -31,10 +31,13 @@ type Client struct {
 	handler ClientHandlerInterface
 
 	// channel
-	rcvASDU  chan []byte // for received asdu
-	sendASDU chan []byte // for send asdu
-	rcvRaw   chan []byte // for recvLoop raw cs104 frame
-	sendRaw  chan []byte // for sendLoop raw cs104 frame
+	rcvASDU chan []byte // for received asdu
+	rcvRaw  chan []byte // for recvLoop raw cs104 frame
+	sendRaw chan []byte // for sendLoop raw cs104 frame
+
+	// sendQueue holds outbound ASDU payloads awaiting transmission. Unlike
+	// the channels above, it survives a reconnect: see messageQueue.
+	sendQueue *messageQueue
 
 	// I帧的发送与接收序号
 	seqNoSend uint16 // sequence number of next outbound I-frame
@@ -71,7 +74,7 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 		option:           *o,
 		handler:          handler,
 		rcvASDU:          make(chan []byte, o.config.RecvUnAckLimitW<<4),
-		sendASDU:         make(chan []byte, o.config.SendUnAckLimitK<<4),
+		sendQueue:        newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
 		rcvRaw:           make(chan []byte, o.config.RecvUnAckLimitW<<5),
 		sendRaw:          make(chan []byte, o.config.SendUnAckLimitK<<5), // may not block!
 		Clog:             clog.NewLogger("cs104 client => "),
@@ -301,19 +304,17 @@ func (sf *Client) run(ctx context.Context, conn net.Conn) {
 	sf.onConnect(sf)
 	for {
 		if atomic.LoadUint32(&sf.isActive) == active && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.option.config.SendUnAckLimitK {
-			select {
-			case o := <-sf.sendASDU:
+			if o, ok := sf.sendQueue.Pop(); ok {
 				sendIFrame(o)
 				idleTimeout3Sine = time.Now()
 				continue
-			case <-sf.ctx.Done():
-				return
-			default: // make no block
 			}
 		}
 		select {
 		case <-sf.ctx.Done():
 			return
+		case <-sf.sendQueue.Ready():
+			continue
 		case now := <-checkTicker.C:
 			// check all timeouts
 			if now.Sub(testFrAliveSendSince) >= sf.option.config.SendUnAckTimeout1 ||
@@ -464,14 +465,16 @@ func (sf *Client) cleanUp() {
 	sf.seqNoRcv = 0
 	sf.seqNoSend = 0
 	sf.pending = nil
-	// clear sending chan buffer
+	// clear the raw-frame and inbound-ASDU buffers: they're tied to the
+	// sequence-number state of the connection that just ended, so replaying
+	// them makes no sense. sendQueue is deliberately left untouched, so
+	// outbound messages the caller queued survive the reconnect.
 loop:
 	for {
 		select {
 		case <-sf.sendRaw:
 		case <-sf.rcvRaw:
 		case <-sf.rcvASDU:
-		case <-sf.sendASDU:
 		default:
 			break loop
 		}
@@ -551,10 +554,8 @@ func (sf *Client) Send(a *asdu.ASDU) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case sf.sendASDU <- data:
-	default:
-		return ErrBufferFulled
+	if sf.sendQueue.Push(data) {
+		sf.Warn("send queue full, dropped the oldest unsent message")
 	}
 	return nil
 }

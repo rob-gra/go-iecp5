@@ -53,14 +53,14 @@ func newTestSrvSession(t *testing.T, handler ServerHandlerInterface, cfg Config)
 
 	serverConn, peerConn := net.Pipe()
 	sess := &SrvSession{
-		config:   &cfg,
-		params:   asdu.ParamsWide,
-		handler:  handler,
-		rcvASDU:  make(chan []byte, 1024),
-		sendASDU: make(chan []byte, 1024),
-		rcvRaw:   make(chan []byte, 1024),
-		sendRaw:  make(chan []byte, 1024),
-		Clog:     clog.NewLogger("test cs104 => "),
+		config:    &cfg,
+		params:    asdu.ParamsWide,
+		handler:   handler,
+		rcvASDU:   make(chan []byte, 1024),
+		sendQueue: newMessageQueue(1024),
+		rcvRaw:    make(chan []byte, 1024),
+		sendRaw:   make(chan []byte, 1024),
+		Clog:      clog.NewLogger("test cs104 => "),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -266,5 +266,27 @@ func TestSrvSession_updateAckNoOut_Wraparound(t *testing.T) {
 	}
 	if sess.ackNoSend != 0 {
 		t.Fatalf("ackNoSend = %d, want 0", sess.ackNoSend)
+	}
+}
+
+// TestSrvSession_CleanUp_PreservesSendQueue is a regression test: cleanUp
+// used to drain every channel including outbound sends, so a message queued
+// but not yet transmitted was silently discarded on every reconnect
+// (ServerSpecial reuses one SrvSession across reconnects, calling cleanUp
+// at the top of every run()). sendQueue must survive it.
+func TestSrvSession_CleanUp_PreservesSendQueue(t *testing.T) {
+	sess := &SrvSession{
+		sendQueue: newMessageQueue(10),
+		rcvASDU:   make(chan []byte, 1),
+		rcvRaw:    make(chan []byte, 1),
+		sendRaw:   make(chan []byte, 1),
+	}
+	sess.sendQueue.Push([]byte("pending"))
+
+	sess.cleanUp()
+
+	got, ok := sess.sendQueue.Pop()
+	if !ok || string(got) != "pending" {
+		t.Fatalf("cleanUp must not discard queued outbound messages: got %q, ok=%v", got, ok)
 	}
 }
