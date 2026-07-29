@@ -111,6 +111,9 @@ func (sf *Server) handleSessionActivated(activated *SrvSession) {
 
 	for _, sess := range superseded {
 		sf.Debug("closing connection: superseded by a newly active connection in the same redundancy group")
+		// Hand off whatever the superseded connection hadn't sent yet to the
+		// connection that's replacing it, so closing it doesn't lose data.
+		sess.sendQueue.DrainTo(activated.sendQueue)
 		sess.forceClose()
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -147,5 +148,46 @@ func TestServer_ConnectionIsRedundancyGroup_BothStayActive(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if !sessA.IsConnected() || !sessB.IsConnected() {
 		t.Fatal("without a redundancy group, both connections should remain independently active")
+	}
+}
+
+// TestServer_HandleSessionActivated_HandsOffQueuedMessages verifies that
+// closing a superseded connection doesn't lose whatever it hadn't sent yet:
+// handleSessionActivated must drain the loser's sendQueue into the winner's
+// before asking the loser to close. Exercised directly (not through real
+// run() goroutines over net.Pipe) so the outcome doesn't depend on winning a
+// race against the loser's own send loop draining its queue first.
+func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
+	srv := NewServer(stubServerHandler{})
+	srv.SetServerMode(ModeSingleRedundancyGroup)
+
+	groupKey := singleRedundancyGroupKey{}
+
+	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, closeCh: make(chan struct{})}
+	atomic.StoreUint32(&sessA.isActive, active)
+	sessA.sendQueue.Push([]byte("queued-for-A"))
+
+	sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey}
+	atomic.StoreUint32(&sessB.isActive, active)
+
+	srv.mux.Lock()
+	srv.sessions[sessA] = struct{}{}
+	srv.sessions[sessB] = struct{}{}
+	srv.mux.Unlock()
+
+	srv.handleSessionActivated(sessB)
+
+	got, ok := sessB.sendQueue.Pop()
+	if !ok || string(got) != "queued-for-A" {
+		t.Fatalf("sessB.sendQueue.Pop() = %q, %v, want the handed-off message", got, ok)
+	}
+	if n := sessA.sendQueue.Len(); n != 0 {
+		t.Fatalf("sessA.sendQueue.Len() = %d, want 0 after hand-off", n)
+	}
+
+	select {
+	case <-sessA.closeCh:
+	default:
+		t.Fatal("sessA.closeCh should be closed: forceClose was expected")
 	}
 }

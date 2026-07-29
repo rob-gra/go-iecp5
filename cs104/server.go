@@ -89,13 +89,13 @@ func (sf *Server) AddRedundancyGroup(rg *RedundancyGroup) *Server {
 // without a real net.Listener.
 func (sf *Server) newSession(conn net.Conn) *SrvSession {
 	return &SrvSession{
-		config:   &sf.config,
-		params:   &sf.params,
-		handler:  sf.handler,
-		rcvASDU:  make(chan []byte, sf.config.RecvUnAckLimitW<<4),
-		sendASDU: make(chan []byte, sf.config.SendUnAckLimitK<<4),
-		rcvRaw:   make(chan []byte, sf.config.RecvUnAckLimitW<<5),
-		sendRaw:  make(chan []byte, sf.config.SendUnAckLimitK<<5), // may not block!
+		config:    &sf.config,
+		params:    &sf.params,
+		handler:   sf.handler,
+		rcvASDU:   make(chan []byte, sf.config.RecvUnAckLimitW<<4),
+		sendQueue: newMessageQueue(int(sf.config.SendUnAckLimitK) << 4),
+		rcvRaw:    make(chan []byte, sf.config.RecvUnAckLimitW<<5),
+		sendRaw:   make(chan []byte, sf.config.SendUnAckLimitK<<5), // may not block!
 
 		onConnection:       sf.onConnection,
 		connectionLost:     sf.connectionLost,
