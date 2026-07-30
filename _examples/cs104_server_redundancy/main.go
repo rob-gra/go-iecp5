@@ -1,11 +1,13 @@
 // Command cs104_server_redundancy demonstrates cs104.Server configured for
 // redundant masters: IEC 60870-5-104 redundancy expects only one master to
-// be actively receiving data at a time. With ModeSingleRedundancyGroup, when
-// a second master connects and sends STARTDT, the server force-closes
-// whichever connection was previously active in the group, and hands off
-// any of its not-yet-sent outbound messages to the connection replacing it
-// (see cs104.RedundancyGroup for grouping by client IP instead, under
-// ModeMultipleRedundancyGroups).
+// be actively receiving data at a time, with the others kept connected as
+// warm standbys so they can take over without paying reconnection cost.
+// With ModeSingleRedundancyGroup, when a second master connects and sends
+// STARTDT, the server deactivates whichever connection was previously
+// active in the group (an unsolicited STOPDT confirm; its TCP connection is
+// left open), and hands off any of its not-yet-sent outbound messages to
+// the connection replacing it (see cs104.RedundancyGroup for grouping by
+// client IP instead, under ModeMultipleRedundancyGroups).
 package main
 
 import (
@@ -32,7 +34,10 @@ func main() {
 		log.Println("master connected")
 	})
 	srv.SetConnectionLostHandler(func(c asdu.Connect) {
-		log.Println("master disconnected (either it dropped, or it was superseded by another active master in its redundancy group)")
+		// Note: a master superseded by another active master in its
+		// redundancy group is deactivated, not disconnected, so this only
+		// fires for a connection that actually dropped.
+		log.Println("master disconnected")
 	})
 	srv.LogMode(true)
 

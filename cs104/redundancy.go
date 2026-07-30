@@ -18,9 +18,11 @@ const (
 
 	// ModeSingleRedundancyGroup treats every connection to this server as
 	// members of one redundancy group: only one connection may be active at
-	// a time. Activating a connection (STARTDT) closes any other connection
-	// that was previously active, matching the "one active master" model
-	// IEC 60870-5-104 redundancy is intended for.
+	// a time. Activating a connection (STARTDT) deactivates any other
+	// connection that was previously active in the group -- it falls back
+	// to STOPDT but stays connected as a standby -- matching the "one
+	// active master, others as warm standbys" model IEC 60870-5-104
+	// redundancy is intended for.
 	ModeSingleRedundancyGroup
 
 	// ModeMultipleRedundancyGroups groups connections by the RedundancyGroup
@@ -91,7 +93,11 @@ func (sf *Server) groupKeyFor(conn net.Conn) interface{} {
 // handleSessionActivated is invoked (via SrvSession.onActivate) whenever a
 // session transitions from inactive to active. If the session belongs to a
 // redundancy group, any other still-active session in the same group is
-// closed, since only one connection per group may be active at a time.
+// deactivated, since only one connection per group may be active at a time.
+// Per IEC 60870-5-104's redundant-connection model, the superseded
+// connection is not closed: it falls back to inactive (STOPDT) and stays
+// connected as a standby, ready to be reactivated later without paying
+// reconnection cost.
 func (sf *Server) handleSessionActivated(activated *SrvSession) {
 	if activated.redundancyGroupKey == nil {
 		return
@@ -110,10 +116,11 @@ func (sf *Server) handleSessionActivated(activated *SrvSession) {
 	sf.mux.Unlock()
 
 	for _, sess := range superseded {
-		sf.Debug("closing connection: superseded by a newly active connection in the same redundancy group")
+		sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
 		// Hand off whatever the superseded connection hadn't sent yet to the
-		// connection that's replacing it, so closing it doesn't lose data.
+		// connection that's replacing it, since it won't be transmitting
+		// anymore once deactivated.
 		sess.sendQueue.DrainTo(activated.sendQueue)
-		sess.forceClose()
+		sess.forceDeactivate()
 	}
 }

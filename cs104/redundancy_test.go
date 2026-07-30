@@ -119,16 +119,31 @@ func TestServer_SingleRedundancyGroup_ActivatingSupersedesPriorActive(t *testing
 	}
 
 	// A shared a redundancy group with B, and B just activated, so A should
-	// now be forced closed.
-	buf := make([]byte, 1)
-	if _, err := peerA.Read(buf); err == nil {
-		t.Fatal("expected connection A to be closed after B activated in the same redundancy group")
+	// be deactivated (an unsolicited StopDtConfirm), but per
+	// IEC 60870-5-104's redundant-connection model its TCP connection must
+	// stay up as a warm standby, not be closed.
+	head, _ := readFrame(t, peerA)
+	if u, ok := head.(uAPCI); !ok || u.function != uStopDtConfirm {
+		t.Fatalf("got %#v, want an unsolicited StopDtConfirm", head)
 	}
-	if sessA.IsConnected() {
-		t.Fatal("session A should be disconnected")
+	if sessA.IsActive() {
+		t.Fatal("session A should be inactive after being superseded")
 	}
-	if !sessB.IsConnected() {
-		t.Fatal("session B should remain connected")
+	if !sessA.IsConnected() {
+		t.Fatal("session A must remain connected (a standby), not be closed, when superseded")
+	}
+	if !sessB.IsConnected() || !sessB.IsActive() {
+		t.Fatal("session B should be connected and active")
+	}
+
+	// A must still be usable as a standby: reactivating it should work
+	// without reconnecting, and that in turn supersedes B.
+	writeFrame(t, peerA, newUFrame(uStartDtActive))
+	if head, _ := readFrame(t, peerA); head.(uAPCI).function != uStartDtConfirm {
+		t.Fatalf("expected A's StartDtConfirm on reactivation")
+	}
+	if !sessA.IsActive() {
+		t.Fatal("session A should be active again after reactivation")
 	}
 }
 
@@ -152,18 +167,19 @@ func TestServer_ConnectionIsRedundancyGroup_BothStayActive(t *testing.T) {
 }
 
 // TestServer_HandleSessionActivated_HandsOffQueuedMessages verifies that
-// closing a superseded connection doesn't lose whatever it hadn't sent yet:
-// handleSessionActivated must drain the loser's sendQueue into the winner's
-// before asking the loser to close. Exercised directly (not through real
-// run() goroutines over net.Pipe) so the outcome doesn't depend on winning a
-// race against the loser's own send loop draining its queue first.
+// deactivating a superseded connection doesn't lose whatever it hadn't sent
+// yet: handleSessionActivated must drain the loser's sendQueue into the
+// winner's before asking the loser to deactivate. Exercised directly (not
+// through real run() goroutines over net.Pipe) so the outcome doesn't depend
+// on winning a race against the loser's own send loop draining its queue
+// first.
 func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 	srv := NewServer(stubServerHandler{})
 	srv.SetServerMode(ModeSingleRedundancyGroup)
 
 	groupKey := singleRedundancyGroupKey{}
 
-	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, closeCh: make(chan struct{})}
+	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
 	atomic.StoreUint32(&sessA.isActive, active)
 	sessA.sendQueue.Push([]byte("queued-for-A"))
 
@@ -186,8 +202,8 @@ func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 	}
 
 	select {
-	case <-sessA.closeCh:
+	case <-sessA.deactivateCh:
 	default:
-		t.Fatal("sessA.closeCh should be closed: forceClose was expected")
+		t.Fatal("sessA.deactivateCh should have received a signal: forceDeactivate was expected")
 	}
 }

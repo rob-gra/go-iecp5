@@ -68,11 +68,16 @@ type SrvSession struct {
 	// sharing the same non-nil key: see Server.groupKeyFor. A nil key means
 	// this session isn't part of any redundancy group.
 	redundancyGroupKey interface{}
-	// closeCh, closed via closeOnce, forces this session to shut down, e.g.
-	// because it was superseded by another connection in its redundancy
-	// group. Safe to close from any goroutine.
-	closeCh   chan struct{}
-	closeOnce sync.Once
+	// deactivateCh signals this session to fall back to inactive (as if it
+	// had processed STOPDT), e.g. because it was superseded by another
+	// connection in its redundancy group. Per IEC 60870-5-104's redundant
+	// connection model, only one connection may be active at a time, but
+	// the others stay established as warm standbys so they can be
+	// reactivated without paying reconnection cost -- so this only flips
+	// the session back to inactive, it does not close the connection.
+	// Buffered 1 and pushed to non-blockingly: safe to signal from any
+	// goroutine, and a pending signal doesn't need to queue twice.
+	deactivateCh chan struct{}
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -85,13 +90,16 @@ func (sf *SrvSession) IsActive() bool {
 	return atomic.LoadUint32(&sf.isActive) == active
 }
 
-// forceClose asks the session to shut down, e.g. because it was superseded
-// by another connection in the same redundancy group. Safe to call multiple
-// times and from any goroutine.
-func (sf *SrvSession) forceClose() {
-	sf.closeOnce.Do(func() {
-		close(sf.closeCh)
-	})
+// forceDeactivate asks the session to fall back to inactive, e.g. because
+// it was superseded by another connection in the same redundancy group. The
+// underlying connection is left alone: it remains connected as a standby,
+// ready to be reactivated (STARTDT) later. Safe to call multiple times and
+// from any goroutine.
+func (sf *SrvSession) forceDeactivate() {
+	select {
+	case sf.deactivateCh <- struct{}{}:
+	default:
+	}
 }
 
 // RecvLoop feeds t.rcvRaw.
@@ -266,9 +274,14 @@ func (sf *SrvSession) run(ctx context.Context, conn net.Conn) {
 		select {
 		case <-sf.ctx.Done():
 			return
-		case <-sf.closeCh:
-			sf.Debug("closing: superseded by another connection in the redundancy group")
-			return
+		case <-sf.deactivateCh:
+			// Superseded by another connection in the same redundancy
+			// group: fall back to inactive, same as processing STOPDT, but
+			// stay connected as a standby so we can be reactivated later
+			// without the peer having to reconnect.
+			sf.Debug("deactivating: superseded by another connection in the redundancy group")
+			sendUFrame(uStopDtConfirm)
+			atomic.StoreUint32(&sf.isActive, inactive)
 		case <-sf.sendQueue.Ready():
 			continue
 		case now := <-checkTicker.C:
@@ -428,9 +441,8 @@ func (sf *SrvSession) cleanUp() {
 	sf.pending = nil
 	atomic.StoreUint32(&sf.isActive, inactive)
 	// ServerSpecial reuses this SrvSession across reconnects, so re-arm the
-	// force-close signal for the new connection's lifetime.
-	sf.closeOnce = sync.Once{}
-	sf.closeCh = make(chan struct{})
+	// deactivate signal for the new connection's lifetime.
+	sf.deactivateCh = make(chan struct{}, 1)
 	// clear the raw-frame and inbound-ASDU buffers: they're tied to the
 	// sequence-number state of the connection that just ended, so replaying
 	// them makes no sense. sendQueue is deliberately left untouched, so
