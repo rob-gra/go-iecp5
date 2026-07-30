@@ -1,10 +1,12 @@
 // Command cs104_server demonstrates cs104.Server, the IEC 60870-5-104
-// slave/RTU side: it listens for incoming master connections and responds
-// to a general interrogation with one point of data.
+// slave/RTU side: it listens for incoming master connections, responds to a
+// general interrogation with one point of data, and periodically reports a
+// few Go runtime statistics as process data (see reportRuntimeMetrics).
 package main
 
 import (
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -20,6 +22,10 @@ func main() {
 		log.Println("master disconnected")
 	})
 	srv.LogMode(true)
+
+	// Server itself implements asdu.Connect, broadcasting to every
+	// currently connected master.
+	go reportRuntimeMetrics(srv)
 
 	srv.ListenAndServer(":2404")
 }
@@ -53,3 +59,46 @@ func (handler) ResetProcessHandler(asdu.Connect, *asdu.ASDU, asdu.QualifierOfRes
 }
 func (handler) DelayAcquisitionHandler(asdu.Connect, *asdu.ASDU, uint16) error { return nil }
 func (handler) ASDUHandler(asdu.Connect, *asdu.ASDU) error                     { return nil }
+
+// reportRuntimeMetrics periodically publishes a few Go runtime statistics as
+// spontaneous IEC 60870-5-104 process data, useful as a self-monitoring
+// signal for the RTU process itself:
+//
+//   - IOA 10: heap memory in use, in MiB -- type 36, M_ME_TF_1 (measured
+//     value, short floating point number, with a CP56Time2a time tag).
+//   - IOA 11: number of goroutines -- also M_ME_TF_1. Both are continuous
+//     measurements, so a floating point type fits naturally.
+//   - IOA 12: whether a GC cycle has run since the last report -- type 30,
+//     M_SP_TB_1 (single point information, with a CP56Time2a time tag).
+//     Most runtime stats are continuous measurements, not naturally
+//     boolean, but "did a GC happen in this interval" is a clean fit for a
+//     single (on/off) indication.
+func reportRuntimeMetrics(c asdu.Connect) {
+	var lastNumGC uint32
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
+		now := time.Now()
+		cause := asdu.CauseOfTransmission{Cause: asdu.Spontaneous}
+
+		if err := asdu.MeasuredValueFloatCP56Time2a(c, cause, asdu.GlobalCommonAddr,
+			asdu.MeasuredValueFloatInfo{Ioa: 10, Value: float32(mem.HeapAlloc) / (1 << 20), Qds: asdu.QDSGood, Time: now}); err != nil {
+			log.Printf("send heap-in-use metric failed: %v", err)
+		}
+		if err := asdu.MeasuredValueFloatCP56Time2a(c, cause, asdu.GlobalCommonAddr,
+			asdu.MeasuredValueFloatInfo{Ioa: 11, Value: float32(runtime.NumGoroutine()), Qds: asdu.QDSGood, Time: now}); err != nil {
+			log.Printf("send goroutine-count metric failed: %v", err)
+		}
+
+		gcRanSinceLastReport := mem.NumGC != lastNumGC
+		lastNumGC = mem.NumGC
+		if err := asdu.SingleCP56Time2a(c, cause, asdu.GlobalCommonAddr,
+			asdu.SinglePointInfo{Ioa: 12, Value: gcRanSinceLastReport, Qds: asdu.QDSGood, Time: now}); err != nil {
+			log.Printf("send gc-occurred indication failed: %v", err)
+		}
+	}
+}
