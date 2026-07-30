@@ -68,6 +68,11 @@ type SrvSession struct {
 	// sharing the same non-nil key: see Server.groupKeyFor. A nil key means
 	// this session isn't part of any redundancy group.
 	redundancyGroupKey interface{}
+	// commonAddrFilter, if set, decides whether this session is responsible
+	// for a given common address (station address); see
+	// Server.SetCommonAddrFilter/AllowCommonAddrs. Nil means every CA other
+	// than the invalid marker (0) is accepted.
+	commonAddrFilter func(asdu.CommonAddr) bool
 	// deactivateCh signals this session to fall back to inactive (as if it
 	// had processed STOPDT), e.g. because it was superseded by another
 	// connection in its redundancy group. Per IEC 60870-5-104's redundant
@@ -88,6 +93,24 @@ type SrvSession struct {
 // and not since sent/received STOPDT.
 func (sf *SrvSession) IsActive() bool {
 	return atomic.LoadUint32(&sf.isActive) == active
+}
+
+// commonAddrAllowed reports whether ca should be processed by this session:
+// never the invalid marker (0), and either the broadcast address
+// (asdu.GlobalCommonAddr, always accepted since it isn't something a single
+// station owns) or accepted by the configured commonAddrFilter. With no
+// filter configured, every CA other than the invalid marker is accepted.
+func (sf *SrvSession) commonAddrAllowed(ca asdu.CommonAddr) bool {
+	if ca == asdu.InvalidCommonAddr {
+		return false
+	}
+	if ca == asdu.GlobalCommonAddr {
+		return true
+	}
+	if sf.commonAddrFilter == nil {
+		return true
+	}
+	return sf.commonAddrFilter(ca)
 }
 
 // forceDeactivate asks the session to fall back to inactive, e.g. because
@@ -442,14 +465,15 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 
 	sf.Debug("ASDU %+v", asduPack)
 
+	if !sf.commonAddrAllowed(asduPack.CommonAddr) {
+		return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
+	}
+
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd
 		if !(asduPack.Identifier.Coa.Cause == asdu.Activation ||
 			asduPack.Identifier.Coa.Cause == asdu.Deactivation) {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
-		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
 		// decode on a clone: Get*Cmd consumes infoObj, and SendReplyMirror
 		// (here or in the handler) needs the original bytes intact to echo.
@@ -463,9 +487,6 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
-		}
 		ioa, qcc := asduPack.Clone().GetCounterInterrogationCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
@@ -476,17 +497,11 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Request {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
-		}
 		return sf.handler.ReadHandler(sf, asduPack, asduPack.Clone().GetReadCmd())
 
 	case asdu.C_CS_NA_1: // ClockSynchronizationCmd
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
-		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
 
 		ioa, tm := asduPack.Clone().GetClockSynchronizationCmd()
@@ -499,9 +514,6 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
-		}
 		ioa, _ := asduPack.Clone().GetTestCommand()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
@@ -512,9 +524,6 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
-		}
 		ioa, qrp := asduPack.Clone().GetResetProcessCmd()
 		if ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
@@ -524,9 +533,6 @@ func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 		if !(asduPack.Identifier.Coa.Cause == asdu.Activation ||
 			asduPack.Identifier.Coa.Cause == asdu.Spontaneous) {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
-		}
-		if asduPack.CommonAddr == asdu.InvalidCommonAddr {
-			return asduPack.SendReplyMirror(sf, asdu.UnknownCA)
 		}
 		ioa, msec := asduPack.Clone().GetDelayAcquireCommand()
 		if ioa != asdu.InfoObjAddrIrrelevant {

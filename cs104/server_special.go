@@ -50,7 +50,8 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 			rcvRaw:    make(chan []byte, 1024),
 			sendRaw:   make(chan []byte, 1024), // may not block!
 
-			Clog: clog.NewLogger("cs104 serverSpec => "),
+			commonAddrFilter: o.commonAddrFilter,
+			Clog:             clog.NewLogger("cs104 serverSpec => "),
 		},
 		option: *o,
 	}

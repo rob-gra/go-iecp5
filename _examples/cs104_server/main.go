@@ -21,6 +21,17 @@ func main() {
 	srv.SetConnectionLostHandler(func(c asdu.Connect) {
 		log.Println("master disconnected")
 	})
+
+	// This RTU is responsible for common address 1: a command addressed to
+	// any other CA (other than asdu.GlobalCommonAddr, the broadcast
+	// address, which is always accepted) gets an UnknownCA reply instead of
+	// being dispatched. AllowCommonAddrs is sugar over SetCommonAddrFilter
+	// for a small, static set of owned CAs; for dynamic/computed ownership
+	// use the filter directly instead:
+	//
+	//   srv.SetCommonAddrFilter(func(ca asdu.CommonAddr) bool { return ca == myStationCA })
+	srv.AllowCommonAddrs(1)
+
 	srv.LogMode(true)
 
 	// Server itself implements asdu.Connect, broadcasting to every

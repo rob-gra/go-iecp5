@@ -33,6 +33,7 @@ type Server struct {
 	connectionLost   func(asdu.Connect)
 	serverMode       ServerMode
 	redundancyGroups []*RedundancyGroup
+	commonAddrFilter func(asdu.CommonAddr) bool
 	clog.Clog
 	wg sync.WaitGroup
 }
@@ -83,6 +84,30 @@ func (sf *Server) AddRedundancyGroup(rg *RedundancyGroup) *Server {
 	return sf
 }
 
+// SetCommonAddrFilter sets the callback used to decide whether this server
+// is responsible for a given common address (station address). An incoming
+// ASDU addressed to a CA the filter rejects gets an UnknownCA reply instead
+// of being dispatched to the handler. asdu.GlobalCommonAddr (the broadcast
+// address) is always accepted regardless of the filter, since it isn't
+// something a single station owns.
+//
+// With no filter set (the default), every CA other than the invalid marker
+// (asdu.InvalidCommonAddr, 0) is accepted, matching the library's prior
+// behavior. The filter is read once per accepted connection, so changing it
+// takes effect for new connections; already-open sessions keep using
+// whatever was set when they connected.
+func (sf *Server) SetCommonAddrFilter(f func(asdu.CommonAddr) bool) *Server {
+	sf.commonAddrFilter = f
+	return sf
+}
+
+// AllowCommonAddrs is a convenience over SetCommonAddrFilter for the common
+// case of a small, static set of common addresses this server is
+// responsible for.
+func (sf *Server) AllowCommonAddrs(cas ...asdu.CommonAddr) *Server {
+	return sf.SetCommonAddrFilter(commonAddrSetFilter(cas))
+}
+
 // newSession builds a SrvSession bound to conn, wired with this Server's
 // handlers and redundancy-group configuration. Split out from
 // ListenAndServer's accept loop so it can be driven directly in tests
@@ -101,6 +126,7 @@ func (sf *Server) newSession(conn net.Conn) *SrvSession {
 		connectionLost:     sf.connectionLost,
 		onActivate:         sf.handleSessionActivated,
 		redundancyGroupKey: sf.groupKeyFor(conn),
+		commonAddrFilter:   sf.commonAddrFilter,
 		Clog:               sf.Clog,
 	}
 }

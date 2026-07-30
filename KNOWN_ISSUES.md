@@ -8,7 +8,7 @@ fix.
 - [x] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering) — implemented: `messageQueue` (`cs104/queue.go`)
 - [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
 - [ ] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list)
-- [ ] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook)
+- [x] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook) — implemented: `Server.SetCommonAddrFilter` / `AllowCommonAddrs`
 - [~] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work) — not planned, deemed irrelevant
 - [~] [File transfer (F_xx ASDUs) is an empty stub](#6-file-transfer-f_xx-asdus-is-an-empty-stub) — not planned, deemed irrelevant
 - [~] [Security/authentication ASDU types (S_xx) are declared but entirely unimplemented](#7-securityauthentication-asdu-types-s_xx-are-declared-but-entirely-unimplemented) — not planned, deemed irrelevant
@@ -118,6 +118,8 @@ It never checks whether the CA is actually one this server/station is responsibl
 **Impact**: A server responsible for common address 5 will happily process a command addressed to common address 9999, rather than replying with `UnknownCA` as the protocol intends for addresses it doesn't own.
 
 **Suggested fix**: Add an optional `IsCAAllowedHandler`-style callback (or a configured set of owned CAs) that `serverHandler` consults before dispatching to the type-specific handler, replying `UnknownCA` when the CA isn't one the server owns.
+
+**Status: implemented.** `Server.SetCommonAddrFilter`/`AllowCommonAddrs` (and the equivalent on `ClientOption`, for `ServerSpecial`) let the application declare which CAs it's responsible for; `serverHandler` now checks this once, hoisted above the type-specific switch (replacing 7 duplicated `CommonAddr == InvalidCommonAddr` checks with one `commonAddrAllowed` call). `asdu.GlobalCommonAddr` is always accepted regardless of the filter, since it's the broadcast address and isn't something a single station owns. With no filter configured, behavior is unchanged from before (every CA other than the invalid marker is accepted).
 
 ---
 
