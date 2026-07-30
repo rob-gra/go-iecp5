@@ -256,3 +256,84 @@ func TestServer_HandleSessionActivated_ConcurrentActivation_ExactlyOneSuperseded
 		}
 	}
 }
+
+// TestServer_ReleaseSession_ClearsActiveGroupEntry verifies a disconnected
+// session doesn't stay recorded as its redundancy group's active connection.
+// activeByGroup holds sessions by pointer, so a stale entry would keep a
+// dead session and its buffers reachable for the server's whole lifetime.
+func TestServer_ReleaseSession_ClearsActiveGroupEntry(t *testing.T) {
+	srv := NewServer(stubServerHandler{})
+	srv.SetServerMode(ModeSingleRedundancyGroup)
+	groupKey := singleRedundancyGroupKey{}
+
+	sess := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	atomic.StoreUint32(&sess.isActive, active)
+
+	srv.mux.Lock()
+	srv.sessions[sess] = struct{}{}
+	srv.mux.Unlock()
+	srv.handleSessionActivated(sess)
+
+	srv.mux.Lock()
+	recorded := srv.activeByGroup[groupKey]
+	srv.mux.Unlock()
+	if recorded != sess {
+		t.Fatalf("activeByGroup[group] = %p, want the activated session %p", recorded, sess)
+	}
+
+	// The connection drops and ListenAndServer's goroutine releases it.
+	srv.releaseSession(sess)
+
+	srv.mux.Lock()
+	stale, present := srv.activeByGroup[groupKey]
+	n := len(srv.sessions)
+	srv.mux.Unlock()
+	if present {
+		t.Fatalf("activeByGroup still pins the released session %p, want the entry gone", stale)
+	}
+	if n != 0 {
+		t.Fatalf("srv.sessions has %d entries, want 0 after release", n)
+	}
+}
+
+// TestServer_HandleSessionActivated_SkipsAlreadyInactive verifies that a
+// session which went inactive on its own (it processed a STOPDT from its
+// peer) isn't deactivated a second time when another connection activates.
+// Doing so would put a redundant, unsolicited STOPDT confirm on the wire to
+// a peer that already stopped data transfer.
+func TestServer_HandleSessionActivated_SkipsAlreadyInactive(t *testing.T) {
+	srv := NewServer(stubServerHandler{})
+	srv.SetServerMode(ModeSingleRedundancyGroup)
+	groupKey := singleRedundancyGroupKey{}
+
+	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	atomic.StoreUint32(&sessA.isActive, active)
+	srv.mux.Lock()
+	srv.sessions[sessA] = struct{}{}
+	srv.mux.Unlock()
+	srv.handleSessionActivated(sessA)
+
+	// A's peer sends STOPDT, so A deactivates itself.
+	atomic.StoreUint32(&sessA.isActive, inactive)
+
+	sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	atomic.StoreUint32(&sessB.isActive, active)
+	srv.mux.Lock()
+	srv.sessions[sessB] = struct{}{}
+	srv.mux.Unlock()
+	srv.handleSessionActivated(sessB)
+
+	select {
+	case <-sessA.deactivateCh:
+		t.Fatal("an already-inactive session was told to deactivate again: it would emit a spurious unsolicited STOPDT confirm")
+	default:
+	}
+
+	// B must still have taken over as the group's active connection.
+	srv.mux.Lock()
+	recorded := srv.activeByGroup[groupKey]
+	srv.mux.Unlock()
+	if recorded != sessB {
+		t.Fatalf("activeByGroup[group] = %p, want the newly activated session %p", recorded, sessB)
+	}
+}

@@ -6,6 +6,7 @@ package cs104
 
 import (
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -139,5 +140,42 @@ func TestServer_SetMaxConnections_RejectsBeyondCap(t *testing.T) {
 	fourth := &trackingConn{stubConn: stubConn{remote: stubAddr("192.168.1.10:2404")}}
 	if sess := srv.acceptSession(fourth); sess == nil {
 		t.Fatal("acceptSession() should accept once a slot has freed up")
+	}
+}
+
+// TestServer_acceptSession_AtCapacity_BuildsNoSession verifies the cap is
+// checked before a session is built. newSession allocates rcvASDU/rcvRaw/
+// sendRaw channels sized from Config -- over 10KB of buffers at defaults,
+// and megabytes with a large k/w -- so building one per rejected connection
+// would hand a peer flooding an already-full server much of the very cost
+// the cap exists to deny it. Measured as bytes allocated per rejection,
+// since that is the property in question; the gap between "session built"
+// and "not built" is orders of magnitude, well clear of logging noise.
+func TestServer_acceptSession_AtCapacity_BuildsNoSession(t *testing.T) {
+	srv := NewServer(stubServerHandler{})
+	srv.SetMaxConnections(1)
+
+	first := &trackingConn{stubConn: stubConn{remote: stubAddr("192.168.1.10:2404")}}
+	if sess := srv.acceptSession(first); sess == nil {
+		t.Fatal("first connection should be admitted")
+	}
+
+	rejected := &trackingConn{stubConn: stubConn{remote: stubAddr("192.168.1.10:2404")}}
+	const iterations = 200
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := 0; i < iterations; i++ {
+		if sess := srv.acceptSession(rejected); sess != nil {
+			t.Fatal("acceptSession() should reject once at capacity")
+		}
+	}
+	runtime.ReadMemStats(&after)
+
+	perRejection := (after.TotalAlloc - before.TotalAlloc) / iterations
+	const budget = 2048 // generous: leaves room for logging, far under one session
+	if perRejection > budget {
+		t.Fatalf("rejecting at capacity allocated ~%d bytes per connection (budget %d): a session is being built before the cap is checked", perRejection, budget)
 	}
 }
