@@ -23,9 +23,11 @@ const timeoutResolution = 100 * time.Millisecond
 
 // Server the common server
 type Server struct {
-	config           Config
-	params           asdu.Params
-	handler          ServerHandlerInterface
+	config  Config
+	params  asdu.Params
+	handler ServerHandlerInterface
+	// TLSConfig, when set, makes ListenAndServer serve TLS. See
+	// SetTLSConfig.
 	TLSConfig        *tls.Config
 	mux              sync.Mutex
 	sessions         map[*SrvSession]struct{}
@@ -190,12 +192,24 @@ func (sf *Server) newSession(conn net.Conn) *SrvSession {
 	return sess
 }
 
+// SetTLSConfig makes ListenAndServer serve TLS instead of plaintext, using
+// the given configuration. It mirrors ClientOption.SetTLSConfig on the
+// dial-out side. Must be called before ListenAndServer.
+func (sf *Server) SetTLSConfig(t *tls.Config) *Server {
+	sf.TLSConfig = t
+	return sf
+}
+
 // ListenAndServer run the server
 func (sf *Server) ListenAndServer(addr string) {
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
 		sf.Error("server run failed, %v", err)
 		return
+	}
+	if sf.TLSConfig != nil {
+		listen = tls.NewListener(listen, sf.TLSConfig)
+		sf.Debug("server serving TLS")
 	}
 	sf.mux.Lock()
 	sf.listen = listen

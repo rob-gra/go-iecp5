@@ -47,8 +47,6 @@ type Client struct {
 func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 	c := &Client{
 		connection: connection{
-			config:    &o.config,
-			params:    &o.params,
 			rcvASDU:   make(chan []byte, o.config.RecvUnAckLimitW<<4),
 			sendQueue: newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
 			rcvRaw:    make(chan []byte, o.config.RecvUnAckLimitW<<5),
@@ -61,10 +59,10 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 		onConnectionLost: func(*Client) {},
 	}
 	c.role = c
-	// The config and params the connection reads must be the Client's own
-	// copy of the option, not the caller's, which it may reuse or mutate.
-	c.connection.config = &c.option.config
-	c.connection.params = &c.option.params
+	// Point at this Client's own copy of the option, not the caller's,
+	// which it may reuse or mutate after NewClient returns.
+	c.config = &c.option.config
+	c.params = &c.option.params
 	c.startDtActiveSendSince.Store(time.Time{})
 	c.stopDtActiveSendSince.Store(time.Time{})
 	return c
@@ -214,6 +212,12 @@ func (sf *Client) dispatchASDU(asduPack *asdu.ASDU) error {
 
 // Send send asdu
 func (sf *Client) Send(a *asdu.ASDU) error {
+	// Connection state first, then activation: a disconnected client is
+	// also inactive, and "the connection is gone" is the more useful of the
+	// two answers.
+	if !sf.IsConnected() {
+		return ErrUseClosedConnection
+	}
 	if !sf.IsActive() {
 		return ErrNotActive
 	}
@@ -233,13 +237,13 @@ func (sf *Client) Close() error {
 // SendStartDt start data transmission on this connection
 func (sf *Client) SendStartDt() {
 	sf.startDtActiveSendSince.Store(time.Now())
-	sf.sendUFrame(uStartDtActive)
+	sf.offerUFrame(uStartDtActive)
 }
 
 // SendStopDt stop data transmission on this connection
 func (sf *Client) SendStopDt() {
 	sf.stopDtActiveSendSince.Store(time.Now())
-	sf.sendUFrame(uStopDtActive)
+	sf.offerUFrame(uStopDtActive)
 }
 
 // InterrogationCmd wrap asdu.InterrogationCmd

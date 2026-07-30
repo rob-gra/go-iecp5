@@ -9,7 +9,7 @@ fix.
 - [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
 - [x] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list) — implemented: `Server.SetMaxConnections` / `SetConnectionRequestHandler` / `AllowClientIPs`
 - [x] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook) — implemented: `Server.SetCommonAddrFilter` / `AllowCommonAddrs`
-- [~] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work) — not planned, deemed irrelevant
+- [x] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work) — implemented: `Server.SetTLSConfig`, wired into `ListenAndServer`
 - [~] [File transfer (F_xx ASDUs) is an empty stub](#6-file-transfer-f_xx-asdus-is-an-empty-stub) — not planned, deemed irrelevant
 - [~] [Security/authentication ASDU types (S_xx) are declared but entirely unimplemented](#7-securityauthentication-asdu-types-s_xx-are-declared-but-entirely-unimplemented) — not planned, deemed irrelevant
 - [~] [No threadless/tick-driven mode for embedded or single-threaded use](#8-no-threadlesstick-driven-mode-for-embedded-or-single-threaded-use) — not planned, deemed irrelevant
@@ -46,7 +46,7 @@ There is no real message queue behind this: the channel's capacity is a fixed mu
 
 **Suggested fix**: Introduce an actual bounded queue (e.g. a ring buffer that evicts the oldest entry when full instead of rejecting the newest, or a persistent/replayable queue) between `Send()` and the low-level `sendRaw` transmission, so callers don't need to hand-roll retry/backoff logic around `ErrBufferFulled`, and so data isn't lost purely because of a transient burst or reconnect.
 
-**Status: implemented.** `Client` and `SrvSession` now queue outbound ASDUs in a `messageQueue` (`cs104/queue.go`): a mutex-protected, bounded FIFO that evicts the oldest entry on overflow instead of rejecting the newest (`Send()` no longer returns `ErrBufferFulled`; it logs a warning via the existing `clog` debug logging when an eviction happens). Unlike the old channel, `cleanUp()` no longer drains it, so a message queued but not yet transmitted survives a `Client`/`ServerSpecial` reconnect. On the `Server` side, the connections in a redundancy group share one queue (`Server.queueFor`), so a connection superseded by failover doesn't lose whatever it hadn't sent yet -- the connection replacing it simply continues draining the same queue. `ErrBufferFulled` is kept declared (in `cs104/error.go`) for source compatibility, but this package no longer produces it.
+**Status: implemented.** `Client` and `SrvSession` now queue outbound ASDUs in a `messageQueue` (`cs104/queue.go`): a mutex-protected, bounded FIFO that evicts the oldest entry on overflow instead of rejecting the newest (`Send()` no longer returns `ErrBufferFulled`; it logs a warning via the existing `clog` debug logging when an eviction happens). Unlike the old channel, `cleanUp()` no longer drains it, so a message queued but not yet transmitted survives a `Client`/`ServerSpecial` reconnect. On the `Server` side, the connections in a redundancy group share one queue (`Server.queueFor`), so a connection superseded by failover doesn't lose whatever it hadn't sent yet -- the connection replacing it simply continues draining the same queue. `ErrBufferFulled` has been removed: nothing produced it any more.
 
 ---
 
@@ -151,7 +151,7 @@ There's also no setter for it (`ClientOption` has `SetTLSConfig`, `Server` does 
 
 **Suggested fix**: Either wire `TLSConfig` into `ListenAndServer` (use `tls.Listen` when set) and add a `SetTLSConfig` setter to match the client side, or remove the field entirely if server-side TLS isn't planned, so the API doesn't advertise a capability that doesn't exist.
 
-**Status: not planned.** Deemed irrelevant to current priorities.
+**Status: implemented.** `ListenAndServer` wraps its listener with `tls.NewListener` when `TLSConfig` is set, and `Server.SetTLSConfig` mirrors `ClientOption.SetTLSConfig` on the dial-out side. The field no longer advertises a capability the code doesn't have.
 
 ---
 
