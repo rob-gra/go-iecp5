@@ -75,10 +75,7 @@ func (sf *Server) groupKeyFor(conn net.Conn) interface{} {
 	case ModeSingleRedundancyGroup:
 		return singleRedundancyGroupKey{}
 	case ModeMultipleRedundancyGroups:
-		host := conn.RemoteAddr().String()
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
+		host := hostOnly(conn.RemoteAddr())
 		for _, rg := range sf.redundancyGroups {
 			if rg.matches(host) {
 				return rg
@@ -92,35 +89,42 @@ func (sf *Server) groupKeyFor(conn net.Conn) interface{} {
 
 // handleSessionActivated is invoked (via SrvSession.onActivate) whenever a
 // session transitions from inactive to active. If the session belongs to a
-// redundancy group, any other still-active session in the same group is
-// deactivated, since only one connection per group may be active at a time.
-// Per IEC 60870-5-104's redundant-connection model, the superseded
-// connection is not closed: it falls back to inactive (STOPDT) and stays
-// connected as a standby, ready to be reactivated later without paying
-// reconnection cost.
+// redundancy group, whichever session was previously recorded as that
+// group's active connection is deactivated, since only one connection per
+// group may be active at a time. Per IEC 60870-5-104's redundant-connection
+// model, the superseded connection is not closed: it falls back to inactive
+// (STOPDT) and stays connected as a standby, ready to be reactivated later
+// without paying reconnection cost.
+//
+// activeByGroup (swapped under sf.mux) is the single source of truth for
+// "who is active in this group" -- deliberately not re-derived by scanning
+// sf.sessions for IsActive() sessions on every call. Two sessions in the
+// same group can call onActivate concurrently (e.g. two masters both
+// issuing STARTDT within microseconds of each other during a failover);
+// re-deriving from each session's own IsActive() flag lets both calls see
+// the other as "the one to supersede," and both end up deactivated, leaving
+// the group with no active connection at all. Swapping a single map entry
+// under one lock instead means whichever call acquires the lock second
+// always sees itself already recorded as active by the first, so exactly
+// one of the two is ever told to deactivate.
 func (sf *Server) handleSessionActivated(activated *SrvSession) {
 	if activated.redundancyGroupKey == nil {
 		return
 	}
 
 	sf.mux.Lock()
-	var superseded []*SrvSession
-	for sess := range sf.sessions {
-		if sess == activated || sess.redundancyGroupKey != activated.redundancyGroupKey {
-			continue
-		}
-		if sess.IsActive() {
-			superseded = append(superseded, sess)
-		}
-	}
+	prev := sf.activeByGroup[activated.redundancyGroupKey]
+	sf.activeByGroup[activated.redundancyGroupKey] = activated
 	sf.mux.Unlock()
 
-	for _, sess := range superseded {
-		sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
-		// Hand off whatever the superseded connection hadn't sent yet to the
-		// connection that's replacing it, since it won't be transmitting
-		// anymore once deactivated.
-		sess.sendQueue.DrainTo(activated.sendQueue)
-		sess.forceDeactivate()
+	if prev == nil || prev == activated {
+		return
 	}
+
+	sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
+	// Hand off whatever the superseded connection hadn't sent yet to the
+	// connection that's replacing it, since it won't be transmitting
+	// anymore once deactivated.
+	prev.sendQueue.DrainTo(activated.sendQueue)
+	prev.forceDeactivate()
 }

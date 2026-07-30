@@ -33,7 +33,19 @@ type Server struct {
 	connectionLost   func(asdu.Connect)
 	serverMode       ServerMode
 	redundancyGroups []*RedundancyGroup
+	// activeByGroup tracks, per redundancy-group key, which session is
+	// currently recorded as that group's active connection. See
+	// handleSessionActivated for why this is authoritative state rather than
+	// something re-derived from each session's IsActive() flag.
+	activeByGroup    map[interface{}]*SrvSession
 	commonAddrFilter func(asdu.CommonAddr) bool
+	// maxConnections caps concurrent sessions; zero means unlimited. See
+	// SetMaxConnections.
+	maxConnections int
+	// connectionRequest, if set, decides whether to accept a newly connected
+	// peer before any session state is allocated for it. See
+	// SetConnectionRequestHandler/AllowClientIPs.
+	connectionRequest func(net.Addr) bool
 	clog.Clog
 	wg sync.WaitGroup
 }
@@ -41,11 +53,12 @@ type Server struct {
 // NewServer new a server, default config and default asdu.ParamsWide params
 func NewServer(handler ServerHandlerInterface) *Server {
 	return &Server{
-		config:   DefaultConfig(),
-		params:   *asdu.ParamsWide,
-		handler:  handler,
-		sessions: make(map[*SrvSession]struct{}),
-		Clog:     clog.NewLogger("cs104 server => "),
+		config:        DefaultConfig(),
+		params:        *asdu.ParamsWide,
+		handler:       handler,
+		sessions:      make(map[*SrvSession]struct{}),
+		activeByGroup: make(map[interface{}]*SrvSession),
+		Clog:          clog.NewLogger("cs104 server => "),
 	}
 }
 
@@ -108,6 +121,40 @@ func (sf *Server) AllowCommonAddrs(cas ...asdu.CommonAddr) *Server {
 	return sf.SetCommonAddrFilter(commonAddrSetFilter(cas))
 }
 
+// SetMaxConnections caps the number of concurrent sessions this server will
+// accept. Once at capacity, additional incoming connections are accepted at
+// the TCP level (so the peer sees a successful connect) then immediately
+// closed, until an existing session ends and frees a slot. Zero (the
+// default) means unlimited. Must be called before ListenAndServer.
+func (sf *Server) SetMaxConnections(n int) *Server {
+	sf.maxConnections = n
+	return sf
+}
+
+// SetConnectionRequestHandler sets a callback invoked right after Accept(),
+// before any session state is allocated, with the peer's address available.
+// Returning false rejects the connection (it is closed immediately). Must
+// be called before ListenAndServer.
+func (sf *Server) SetConnectionRequestHandler(f func(remote net.Addr) bool) *Server {
+	sf.connectionRequest = f
+	return sf
+}
+
+// AllowClientIPs is a convenience over SetConnectionRequestHandler for the
+// common case of a small, static set of client IP addresses allowed to
+// connect (the port is ignored; only the host portion of the peer address
+// is compared).
+func (sf *Server) AllowClientIPs(ips ...string) *Server {
+	allowed := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		allowed[ip] = struct{}{}
+	}
+	return sf.SetConnectionRequestHandler(func(remote net.Addr) bool {
+		_, ok := allowed[hostOnly(remote)]
+		return ok
+	})
+}
+
 // newSession builds a SrvSession bound to conn, wired with this Server's
 // handlers and redundancy-group configuration. Split out from
 // ListenAndServer's accept loop so it can be driven directly in tests
@@ -156,12 +203,13 @@ func (sf *Server) ListenAndServer(addr string) {
 			return
 		}
 
+		sess := sf.acceptSession(conn)
+		if sess == nil {
+			continue
+		}
+
 		sf.wg.Add(1)
 		go func() {
-			sess := sf.newSession(conn)
-			sf.mux.Lock()
-			sf.sessions[sess] = struct{}{}
-			sf.mux.Unlock()
 			sess.run(ctx, conn)
 			sf.mux.Lock()
 			delete(sf.sessions, sess)
@@ -169,6 +217,34 @@ func (sf *Server) ListenAndServer(addr string) {
 			sf.wg.Done()
 		}()
 	}
+}
+
+// acceptSession decides whether to admit conn as a new session: it's
+// rejected (and closed immediately) if SetConnectionRequestHandler declines
+// it or SetMaxConnections' cap is already reached, in which case
+// acceptSession returns nil. Otherwise a SrvSession is built, registered in
+// sf.sessions, and returned. Split out from ListenAndServer's accept loop
+// so admission control can be tested without a real net.Listener.
+func (sf *Server) acceptSession(conn net.Conn) *SrvSession {
+	if sf.connectionRequest != nil && !sf.connectionRequest(conn.RemoteAddr()) {
+		sf.Warn("rejected connection from %v: declined by connection request handler", conn.RemoteAddr())
+		_ = conn.Close()
+		return nil
+	}
+
+	sess := sf.newSession(conn)
+
+	sf.mux.Lock()
+	if sf.maxConnections > 0 && len(sf.sessions) >= sf.maxConnections {
+		sf.mux.Unlock()
+		sf.Warn("rejected connection from %v: max connections (%d) reached", conn.RemoteAddr(), sf.maxConnections)
+		_ = conn.Close()
+		return nil
+	}
+	sf.sessions[sess] = struct{}{}
+	sf.mux.Unlock()
+
+	return sess
 }
 
 // Close close the server

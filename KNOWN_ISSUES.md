@@ -7,7 +7,7 @@ fix.
 
 - [x] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering) — implemented: `messageQueue` (`cs104/queue.go`)
 - [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
-- [ ] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list)
+- [x] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list) — implemented: `Server.SetMaxConnections` / `SetConnectionRequestHandler` / `AllowClientIPs`
 - [x] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook) — implemented: `Server.SetCommonAddrFilter` / `AllowCommonAddrs`
 - [~] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work) — not planned, deemed irrelevant
 - [~] [File transfer (F_xx ASDUs) is an empty stub](#6-file-transfer-f_xx-asdus-is-an-empty-stub) — not planned, deemed irrelevant
@@ -100,6 +100,8 @@ There's no cap on the number of concurrent sessions, no hook to inspect/reject a
 **Impact**: A misbehaving or malicious client can open unbounded connections against the server, each spinning up its own set of goroutines and channel buffers, with no way for the application to limit or filter this at the transport layer.
 
 **Suggested fix**: Add a configurable maximum open-connection count and an optional `ConnectionRequestHandler`-style callback invoked right after `Accept()` (with the remote address available) so the application can reject a peer before any session state is allocated.
+
+**Status: implemented.** `Server.SetMaxConnections(n)` caps concurrent sessions; once at capacity, additional connections are accepted at the TCP level then immediately closed, until an existing session ends and frees a slot. `Server.SetConnectionRequestHandler(func(net.Addr) bool)` is invoked right after `Accept()`, before any session state is allocated, and a `false` return closes the connection immediately. `Server.AllowClientIPs(ips...)` is sugar over the handler for a small static allow-list, mirroring `AllowCommonAddrs`. Both checks (and the `sessions` map insertion itself) happen synchronously in `Server.acceptSession`, called from `ListenAndServer`'s accept loop, so the max-connections check can't be overshot by a burst of near-simultaneous connections racing an asynchronous registration.
 
 ---
 
