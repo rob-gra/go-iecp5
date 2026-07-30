@@ -9,6 +9,7 @@ Each directory is a standalone, runnable `package main`. Run with
 | [`cs104_server`](./cs104_server) | `cs104.Server` | The IEC 60870-5-104 slave/RTU: listens for master connections, responds to a general interrogation with one point of data, and periodically reports Go runtime statistics (heap in use, goroutine count, whether a GC ran) as spontaneous process data. |
 | [`cs104_server_special`](./cs104_server_special) | `cs104.ServerSpecial` | A slave/RTU that dials *out* to the master instead of listening, e.g. because it sits behind NAT/firewall. Same protocol behavior as `cs104_server`, opposite TCP direction. |
 | [`cs104_server_redundancy`](./cs104_server_redundancy) | `cs104.Server` | A slave/RTU configured for redundant masters: only one connection per redundancy group is active at a time; connecting a second master deactivates (not closes) the first, which stays as a warm standby. |
+| [`cs104_powerstation_server`](./cs104_powerstation_server) / [`cs104_powerstation_client`](./cs104_powerstation_client) | `cs104.Server` / `cs104.Client` | A more complete, end-to-end demo: a simulated power station (generator + reservoir) driven by a client that interrogates, sets an output setpoint, and starts/stops the station, watching the simulation respond in real time. |
 
 ## Trying them out
 
@@ -32,6 +33,22 @@ cd cs104_server_special && go run .
 `cs104_server_redundancy` speaks the same wire protocol as `cs104_server`;
 run it and connect two masters (e.g. two instances of `cs104_client`, or
 any IEC 104 test client) to see the second one supersede the first.
+
+`cs104_powerstation_server` and `cs104_powerstation_client` are a matched
+pair:
+
+```sh
+# terminal 1
+cd cs104_powerstation_server && go run .
+
+# terminal 2
+cd cs104_powerstation_client && go run .
+```
+
+The client interrogates the station, sets an output setpoint of 75%, starts
+the station, waits 30s watching it ramp up and the reservoir drain, then
+stops it again. Watch either log to see the full command/response exchange,
+or the server's spontaneous measurement reports in between.
 
 ## Runtime metrics as process data
 
