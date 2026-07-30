@@ -5,6 +5,8 @@
 package cs104
 
 import (
+	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -90,33 +92,112 @@ func buildTestMonitorASDU(t *testing.T) []byte {
 	return data
 }
 
-// TestConnection_SendFrame_DoesNotBlockWhenPeerStalls covers the send path:
-// run() emits frames into sendRaw, and a peer that stops reading the socket
-// must not be able to wedge the state machine. If the send were blocking,
-// run() would stop servicing its own t₁ timer and could never tear the
-// failed connection down.
-func TestConnection_SendFrame_DoesNotBlockWhenPeerStalls(t *testing.T) {
+// TestConnection_OfferFrame_DoesNotBlockWhenBufferFull covers the path used
+// by callers outside run's goroutine (the application issuing
+// STARTDT/STOPDT): it must never block them, and must not touch the
+// context run owns.
+func TestConnection_OfferFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 2),
 		Clog:    clog.NewLogger("test cs104 => "),
 	}
 
-	// Fill sendRaw, then push well past its capacity.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := 0; i < 50; i++ {
-			sf.sendUFrame(uTestFrActive)
+			sf.offerUFrame(uStartDtActive)
 		}
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("sendFrame blocked once sendRaw filled: a stalled peer can wedge the state machine")
+		t.Fatal("offerFrame blocked once sendRaw filled")
 	}
 
 	if got := len(sf.sendRaw); got != 2 {
 		t.Fatalf("sendRaw holds %d frames, want 2 (its capacity): excess must be dropped, not buffered", got)
+	}
+}
+
+// TestConnection_SendFrame_UnblocksOnTeardown pins the property that keeps
+// a blocking send safe. sendFrame waits for room rather than dropping --
+// an I-frame has already taken a sequence number by the time it gets
+// there, and discarding it would leave a hole the peer answers by dropping
+// the connection. Waiting is only acceptable because the wait ends the
+// moment the connection is torn down; otherwise run() could sit in a send
+// forever and never service its own t1 timer.
+func TestConnection_SendFrame_UnblocksOnTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sf := &connection{
+		sendRaw: make(chan []byte, 1),
+		ctx:     ctx,
+		Clog:    clog.NewLogger("test cs104 => "),
+	}
+	sf.sendRaw <- []byte{0} // buffer now full; nothing drains it
+
+	blocked := make(chan struct{})
+	go func() {
+		defer close(blocked)
+		sf.sendFrame([]byte{1})
+	}()
+
+	select {
+	case <-blocked:
+		t.Fatal("sendFrame returned while the buffer was full and the connection was live: the frame was dropped, which loses its sequence number")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendFrame stayed blocked after teardown: run() can be wedged by a peer that stops reading")
+	}
+}
+
+// TestConnection_SendLoop_WriteDeadlineEndsStalledWrite covers where the
+// bound on a stalled peer actually lives. sendLoop gives each write t1 --
+// the protocol's own limit on an unresponsive peer -- so a peer that stops
+// reading the socket surfaces as a write error that ends the connection,
+// rather than as unbounded backpressure into the state machine.
+func TestConnection_SendLoop_WriteDeadlineEndsStalledWrite(t *testing.T) {
+	cfg := fastTestConfig() // t1 = 150ms
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sf := &connection{
+		config:  &cfg,
+		sendRaw: make(chan []byte, 4),
+		ctx:     ctx,
+		cancel:  cancel,
+		Clog:    clog.NewLogger("test cs104 => "),
+	}
+
+	// net.Pipe is unbuffered, so this write blocks until the peer reads --
+	// and the peer never does.
+	sf.sendRaw <- newUFrame(uTestFrActive)
+
+	sf.wg.Add(1)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		sf.sendLoop(conn)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendLoop never gave up on a peer that stopped reading: the write has no deadline")
+	}
+
+	// Giving up must also tear the connection down, not just exit the loop.
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("sendLoop exited without cancelling the connection")
 	}
 }

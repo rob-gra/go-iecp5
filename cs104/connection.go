@@ -210,6 +210,17 @@ func (sf *connection) sendLoop(conn net.Conn) {
 			return
 		case apdu := <-sf.sendRaw:
 			sf.Debug("TX Raw[% x]", apdu)
+			// Bound how long one frame may take to reach the peer. Without
+			// a deadline, a peer that stops reading blocks Write forever:
+			// sendRaw fills, and run() -- the one that would notice via t1
+			// and tear the connection down -- ends up queued behind it
+			// instead. t1 is the protocol's own limit on an unresponsive
+			// peer, so it is the right bound here too. A missed deadline
+			// surfaces as a write error below and ends the connection.
+			if err := conn.SetWriteDeadline(time.Now().Add(sf.config.SendUnAckTimeout1)); err != nil {
+				sf.Error("set write deadline failed, %v", err)
+				return
+			}
 			for wrCnt := 0; len(apdu) > wrCnt; {
 				byteCount, err := conn.Write(apdu[wrCnt:])
 				if err != nil {
@@ -256,13 +267,29 @@ func (sf *connection) handlerLoop() {
 	}
 }
 
-// sendFrame hands a raw frame to sendLoop. It never blocks the state
-// machine: a peer that stops reading must not be able to wedge run(), which
-// still has to service its own t1 timer and shut the connection down. A
-// full sendRaw means the peer is not draining the socket, so the connection
-// is already failing; dropping the frame lets run() reach that conclusion
-// through the normal timeout path instead of deadlocking first.
+// sendFrame hands a raw frame to sendLoop. Only run's own goroutine may
+// call it, since it reads the per-connection context run installs.
+//
+// It waits for room rather than dropping: an I-frame has already taken a
+// sequence number by the time it gets here, so discarding it would leave a
+// hole the peer answers by dropping the connection. Waiting is safe because
+// the wait ends as soon as the connection is torn down -- and sendLoop
+// bounds how long a stalled peer can hold that up, by giving each write a
+// deadline. So run() cannot be wedged by a peer that stops reading, which
+// is what would otherwise stop it servicing its own t1 timer.
 func (sf *connection) sendFrame(apdu []byte) {
+	select {
+	case sf.sendRaw <- apdu:
+	case <-sf.ctx.Done():
+	}
+}
+
+// offerFrame is sendFrame for callers outside run's goroutine: the
+// application issuing STARTDT/STOPDT. It neither blocks nor touches the
+// context run owns, and drops the frame if the buffer is somehow full --
+// these are rare, un-sequenced control frames, so losing one costs a
+// retry rather than the connection.
+func (sf *connection) offerFrame(apdu []byte) {
 	select {
 	case sf.sendRaw <- apdu:
 	default:
@@ -278,6 +305,12 @@ func (sf *connection) sendSFrame(rcvSN uint16) {
 func (sf *connection) sendUFrame(which byte) {
 	sf.Debug("TX uFrame %v", uAPCI{which})
 	sf.sendFrame(newUFrame(which))
+}
+
+// offerUFrame is sendUFrame for callers outside run's goroutine.
+func (sf *connection) offerUFrame(which byte) {
+	sf.Debug("TX uFrame %v", uAPCI{which})
+	sf.offerFrame(newUFrame(which))
 }
 
 func (sf *connection) sendIFrame(asdu1 []byte) {
