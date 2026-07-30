@@ -201,3 +201,79 @@ func TestConnection_SendLoop_WriteDeadlineEndsStalledWrite(t *testing.T) {
 		t.Fatal("sendLoop exited without cancelling the connection")
 	}
 }
+
+// TestConnection_OutboundFrameDefersT3 covers what t₃ measures. The
+// standard treats idleness as no traffic in *either* direction, so a frame
+// we put on the link is activity and must push the idle timer back. The
+// timer used to be reset only by inbound frames and by outbound I-frames,
+// so a station that was acknowledging steadily but sending no data of its
+// own still asked "are you alive?" on a link that plainly was.
+func TestConnection_OutboundFrameDefersT3(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sf := &connection{
+		sendRaw: make(chan []byte, 4),
+		ctx:     ctx,
+		Clog:    clog.NewLogger("test cs104 => "),
+	}
+
+	sf.idleSince = time.Now().Add(-time.Hour) // long idle
+	sf.sendSFrame(1)                          // an acknowledgement, not an I-frame
+
+	if time.Since(sf.idleSince) > time.Second {
+		t.Fatal("an outbound S-frame did not push back the t₃ idle timer")
+	}
+}
+
+// TestConnection_CloseDoesNotFreeBlockedRecvLoop is why run's teardown
+// cancels outright instead of relying on closing the connection to get
+// there by way of recvLoop failing its read.
+//
+// That reasoning only holds while recvLoop is actually reading. Parked
+// handing a frame to a full rcvRaw it never touches the socket, so closing
+// the connection tells it nothing; an idle sendLoop is no different. With
+// neither reaching cancel, the wg.Wait() in run's defer would have nothing
+// left to wake it.
+//
+// This pins the mechanism rather than the whole race: driving run() into
+// exiting at the exact moment recvLoop is parked is not something a test
+// can arrange reliably, so what is checked here is the property the
+// teardown path depends on.
+func TestConnection_CloseDoesNotFreeBlockedRecvLoop(t *testing.T) {
+	conn, peer := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sf := &connection{
+		rcvRaw: make(chan []byte, 1), // fills immediately, nothing drains it
+		ctx:    ctx,
+		cancel: cancel,
+		Clog:   clog.NewLogger("test cs104 => "),
+	}
+	sf.wg.Add(1)
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); sf.recvLoop(conn) }()
+
+	go func() {
+		for i := 0; i < 2; i++ { // first fills the buffer, second parks recvLoop
+			if _, err := peer.Write(newUFrame(uTestFrActive)); err != nil {
+				return
+			}
+		}
+	}()
+	waitFor(t, time.Second, func() bool { return len(sf.rcvRaw) == 1 })
+
+	_ = conn.Close()
+	select {
+	case <-stopped:
+		t.Fatal("recvLoop exited on conn.Close() alone: this test no longer describes the code, re-check whether teardown still needs its own cancel")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel() // what run's defer now does
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recvLoop stayed parked even after cancel")
+	}
+}
