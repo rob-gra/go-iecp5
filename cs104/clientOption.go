@@ -21,6 +21,7 @@ type ClientOption struct {
 	autoReconnect     bool          // 是否启动重连
 	reconnectInterval time.Duration // 重连间隔时间
 	TLSConfig         *tls.Config   // tls配置
+	commonAddrFilter  func(asdu.CommonAddr) bool
 }
 
 // NewOption with default config and default asdu.ParamsWide params
@@ -31,6 +32,7 @@ func NewOption() *ClientOption {
 		nil,
 		true,
 		DefaultReconnectInterval,
+		nil,
 		nil,
 	}
 }
@@ -73,6 +75,23 @@ func (sf *ClientOption) SetAutoReconnect(b bool) *ClientOption {
 func (sf *ClientOption) SetTLSConfig(t *tls.Config) *ClientOption {
 	sf.TLSConfig = t
 	return sf
+}
+
+// SetCommonAddrFilter sets the callback used to decide whether a
+// cs104.ServerSpecial dial-out slave is responsible for a given common
+// address (station address); see Server.SetCommonAddrFilter for the full
+// behavior. Client ignores this option -- common-address filtering only
+// applies to the slave/RTU role.
+func (sf *ClientOption) SetCommonAddrFilter(f func(asdu.CommonAddr) bool) *ClientOption {
+	sf.commonAddrFilter = f
+	return sf
+}
+
+// AllowCommonAddrs is a convenience over SetCommonAddrFilter for the common
+// case of a small, static set of common addresses this slave/RTU is
+// responsible for.
+func (sf *ClientOption) AllowCommonAddrs(cas ...asdu.CommonAddr) *ClientOption {
+	return sf.SetCommonAddrFilter(commonAddrSetFilter(cas))
 }
 
 // AddRemoteServer adds a broker URI to the list of brokers to be used.

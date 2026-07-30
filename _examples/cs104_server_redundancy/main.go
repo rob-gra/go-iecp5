@@ -31,6 +31,10 @@ func main() {
 	//       AddAllowedClient("192.168.1.10").
 	//       AddAllowedClient("192.168.1.11"))
 
+	// This RTU is responsible for common address 1; see cs104_server's
+	// AllowCommonAddrs call for the full rationale.
+	srv.AllowCommonAddrs(1)
+
 	srv.SetOnConnectionHandler(func(c asdu.Connect) {
 		log.Println("master connected")
 	})

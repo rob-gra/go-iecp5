@@ -101,12 +101,19 @@ func writeFrame(t *testing.T, conn net.Conn, frame []byte) {
 // payload.
 func buildTestCommandASDU(t *testing.T) []byte {
 	t.Helper()
+	return buildTestCommandASDUWithCA(t, asdu.GlobalCommonAddr)
+}
+
+// buildTestCommandASDUWithCA is buildTestCommandASDU, addressed to ca
+// instead of always asdu.GlobalCommonAddr.
+func buildTestCommandASDUWithCA(t *testing.T, ca asdu.CommonAddr) []byte {
+	t.Helper()
 
 	u := asdu.NewASDU(asdu.ParamsWide, asdu.Identifier{
 		Type:       asdu.C_TS_NA_1,
 		Variable:   asdu.VariableStruct{IsSequence: false, Number: 1},
 		Coa:        asdu.CauseOfTransmission{Cause: asdu.Activation},
-		CommonAddr: asdu.GlobalCommonAddr,
+		CommonAddr: ca,
 	})
 	if err := u.AppendInfoObjAddr(asdu.InfoObjAddrIrrelevant); err != nil {
 		t.Fatalf("AppendInfoObjAddr: %v", err)

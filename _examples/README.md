@@ -45,3 +45,15 @@ using continuous and boolean information types together:
 | 10 | 36 (`M_ME_TF_1`, short floating point, CP56Time2a) | Heap memory in use, in MiB |
 | 11 | 36 (`M_ME_TF_1`, short floating point, CP56Time2a) | Number of goroutines |
 | 12 | 30 (`M_SP_TB_1`, single point information, CP56Time2a) | Whether a GC cycle ran since the last report |
+
+## Common-address filtering
+
+`cs104_server`, `cs104_server_special`, and `cs104_server_redundancy` all
+call `AllowCommonAddrs(1)` (on `Server`, or on `ClientOption` before
+`NewServerSpecial` for the dial-out case), declaring that this RTU is
+responsible for common address 1. A command addressed to any other CA gets
+an `UnknownCA` reply instead of being dispatched — except
+`asdu.GlobalCommonAddr` (the broadcast address), which is always accepted
+regardless of the filter. For dynamic or computed ownership instead of a
+small static set, use `SetCommonAddrFilter(func(asdu.CommonAddr) bool)`
+directly.

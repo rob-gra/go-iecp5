@@ -20,6 +20,12 @@ func main() {
 		panic(err)
 	}
 
+	// This RTU is responsible for common address 1; see cs104_server's
+	// AllowCommonAddrs call for the full rationale. Unlike Server, this is
+	// configured on ClientOption, since NewServerSpecial reads it at
+	// construction time below.
+	option.AllowCommonAddrs(1)
+
 	srv := cs104.NewServerSpecial(&handler{}, option)
 	srv.LogMode(true)
 

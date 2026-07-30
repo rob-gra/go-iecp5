@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/url"
 	"time"
+
+	"github.com/thinkgos/go-iecp5/asdu"
 )
 
 // DefaultReconnectInterval defined default value
@@ -63,6 +65,21 @@ func confirmSeqNo(pending []seqPending, ackNoSend, seqNoSend, ackNo uint16) (_ [
 		}
 	}
 	return pending, true
+}
+
+// commonAddrSetFilter returns a filter function that accepts exactly the
+// given common addresses. Used by AllowCommonAddrs on both Server and
+// ClientOption as a convenience over SetCommonAddrFilter for the common
+// case of a small, static set of owned common addresses.
+func commonAddrSetFilter(cas []asdu.CommonAddr) func(asdu.CommonAddr) bool {
+	allowed := make(map[asdu.CommonAddr]struct{}, len(cas))
+	for _, ca := range cas {
+		allowed[ca] = struct{}{}
+	}
+	return func(ca asdu.CommonAddr) bool {
+		_, ok := allowed[ca]
+		return ok
+	}
 }
 
 func openConnection(uri *url.URL, tlsc *tls.Config, timeout time.Duration) (net.Conn, error) {

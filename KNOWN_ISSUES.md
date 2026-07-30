@@ -8,12 +8,12 @@ fix.
 - [x] [Server has no message queue: full send buffers silently drop ASDUs instead of buffering](#1-server-has-no-message-queue-full-send-buffers-silently-drop-asdus-instead-of-buffering) — implemented: `messageQueue` (`cs104/queue.go`)
 - [x] [No redundancy-group / single-active-connection enforcement on the server](#2-no-redundancy-group--single-active-connection-enforcement-on-the-server) — implemented: `Server.SetServerMode` / `AddRedundancyGroup`
 - [ ] [No connection admission control (max connections, accept/reject hook, IP allow-list)](#3-no-connection-admission-control-max-connections-acceptreject-hook-ip-allow-list)
-- [ ] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook)
-- [ ] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work)
-- [ ] [File transfer (F_xx ASDUs) is an empty stub](#6-file-transfer-f_xx-asdus-is-an-empty-stub)
-- [ ] [Security/authentication ASDU types (S_xx) are declared but entirely unimplemented](#7-securityauthentication-asdu-types-s_xx-are-declared-but-entirely-unimplemented)
-- [ ] [No threadless/tick-driven mode for embedded or single-threaded use](#8-no-threadlesstick-driven-mode-for-embedded-or-single-threaded-use)
-- [ ] [No raw-message observation hook for applications](#9-no-raw-message-observation-hook-for-applications)
+- [x] [No per-message common-address filtering hook](#4-no-per-message-common-address-filtering-hook) — implemented: `Server.SetCommonAddrFilter` / `AllowCommonAddrs`
+- [~] [`Server.TLSConfig` is dead code — server-side TLS doesn't actually work](#5-servertlsconfig-is-dead-code--server-side-tls-doesnt-actually-work) — not planned, deemed irrelevant
+- [~] [File transfer (F_xx ASDUs) is an empty stub](#6-file-transfer-f_xx-asdus-is-an-empty-stub) — not planned, deemed irrelevant
+- [~] [Security/authentication ASDU types (S_xx) are declared but entirely unimplemented](#7-securityauthentication-asdu-types-s_xx-are-declared-but-entirely-unimplemented) — not planned, deemed irrelevant
+- [~] [No threadless/tick-driven mode for embedded or single-threaded use](#8-no-threadlesstick-driven-mode-for-embedded-or-single-threaded-use) — not planned, deemed irrelevant
+- [~] [No raw-message observation hook for applications](#9-no-raw-message-observation-hook-for-applications) — not planned, deemed irrelevant
 
 ---
 
@@ -119,6 +119,8 @@ It never checks whether the CA is actually one this server/station is responsibl
 
 **Suggested fix**: Add an optional `IsCAAllowedHandler`-style callback (or a configured set of owned CAs) that `serverHandler` consults before dispatching to the type-specific handler, replying `UnknownCA` when the CA isn't one the server owns.
 
+**Status: implemented.** `Server.SetCommonAddrFilter`/`AllowCommonAddrs` (and the equivalent on `ClientOption`, for `ServerSpecial`) let the application declare which CAs it's responsible for; `serverHandler` now checks this once, hoisted above the type-specific switch (replacing 7 duplicated `CommonAddr == InvalidCommonAddr` checks with one `commonAddrAllowed` call). `asdu.GlobalCommonAddr` is always accepted regardless of the filter, since it's the broadcast address and isn't something a single station owns. With no filter configured, behavior is unchanged from before (every CA other than the invalid marker is accepted).
+
 ---
 
 ## 5. `Server.TLSConfig` is dead code — server-side TLS doesn't actually work
@@ -147,6 +149,8 @@ There's also no setter for it (`ClientOption` has `SetTLSConfig`, `Server` does 
 
 **Suggested fix**: Either wire `TLSConfig` into `ListenAndServer` (use `tls.Listen` when set) and add a `SetTLSConfig` setter to match the client side, or remove the field entirely if server-side TLS isn't planned, so the API doesn't advertise a capability that doesn't exist.
 
+**Status: not planned.** Deemed irrelevant to current priorities.
+
 ---
 
 ## 6. File transfer (F_xx ASDUs) is an empty stub
@@ -166,6 +170,8 @@ The `F_FR_NA_1` … `F_SC_NB_1` type-ID constants exist in `identifier.go` (so p
 
 **Suggested fix**: Either implement the file-transfer ASDUs (F_FR_NA_1 file ready, F_SR_NA_1 section ready, F_SC_NA_1 select/call/request, F_LS_NA_1 last section/segment, F_AF_NA_1 ack file/section, F_SG_NA_1 segment, F_DR_TA_1 directory) following the pattern of `cproc.go`/`csys.go`, or clearly document that file transfer isn't supported so callers don't assume it works because the constants exist.
 
+**Status: not planned.** Deemed irrelevant to current priorities.
+
 ---
 
 ## 7. Security/authentication ASDU types (S_xx) are declared but entirely unimplemented
@@ -175,6 +181,8 @@ The `F_FR_NA_1` … `F_SC_NB_1` type-ID constants exist in `identifier.go` (so p
 **Impact**: Same shape of gap as file transfer: the type catalog suggests support, but there is no actual functionality behind it.
 
 **Suggested fix**: Either implement the authentication/session-key ASDUs or remove/annotate them clearly as unsupported placeholders, so they aren't mistaken for working functionality.
+
+**Status: not planned.** Deemed irrelevant to current priorities.
 
 ---
 
@@ -186,6 +194,8 @@ The `F_FR_NA_1` … `F_SC_NB_1` type-ID constants exist in `identifier.go` (so p
 
 **Suggested fix**: Not necessarily required for a Go library (goroutines are cheap relative to OS threads), but worth deciding deliberately and documenting rather than leaving unaddressed — e.g. an optional synchronous/tick-driven API for advanced users, or an explicit statement in the README that this is out of scope.
 
+**Status: not planned.** Deemed irrelevant to current priorities.
+
 ---
 
 ## 9. No raw-message observation hook for applications
@@ -195,3 +205,5 @@ The `F_FR_NA_1` … `F_SC_NB_1` type-ID constants exist in `identifier.go` (so p
 **Impact**: Applications that want to record raw traffic for diagnostics, replay, or protocol-conformance testing have no supported way to observe it other than parsing debug log output.
 
 **Suggested fix**: Add an optional callback (e.g. `SetRawMessageHandler(func(conn asdu.Connect, data []byte, isSend bool))`) invoked alongside the existing debug logging in `recvLoop`/`sendLoop`, so applications can tap raw traffic without scraping logs.
+
+**Status: not planned.** Deemed irrelevant to current priorities.
