@@ -8,7 +8,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +72,11 @@ type connection struct {
 	status   uint32
 	isActive uint32 // atomic: active/inactive
 	rwMux    sync.RWMutex
+
+	// idleSince is when the link last carried traffic in either
+	// direction, which is what t3 measures. Only run's goroutine touches
+	// it (sendFrame runs there too); offerFrame deliberately does not.
+	idleSince time.Time
 
 	// testFrAliveSendSince is when a TESTFR act was sent and is still
 	// awaiting its confirmation; the zero time means none is outstanding.
@@ -221,20 +225,20 @@ func (sf *connection) sendLoop(conn net.Conn) {
 				sf.Error("set write deadline failed, %v", err)
 				return
 			}
+			// Any write failure ends the connection. This is a stateful
+			// protocol carrying sequence numbers, so a partially written
+			// or failed frame leaves the stream unusable -- there is
+			// nothing to recover to, and the peer reconnects and
+			// re-runs STARTDT. (The retry this replaced was unreachable
+			// anyway: it could only be entered for io.EOF or
+			// io.ErrClosedPipe, neither of which is a net.Error, so its
+			// net.Error.Temporary check -- deprecated since Go 1.18 --
+			// always fell through to the same return.)
 			for wrCnt := 0; len(apdu) > wrCnt; {
 				byteCount, err := conn.Write(apdu[wrCnt:])
 				if err != nil {
-					// See: https://github.com/golang/go/issues/4373
-					if err != io.EOF && err != io.ErrClosedPipe ||
-						strings.Contains(err.Error(), "use of closed network connection") {
-						sf.Error("sendRaw failed, %v", err)
-						return
-					}
-					if e, ok := err.(net.Error); !ok || !e.Temporary() {
-						sf.Error("sendRaw failed, %v", err)
-						return
-					}
-					// temporary error may be recoverable
+					sf.Error("sendRaw failed, %v", err)
+					return
 				}
 				wrCnt += byteCount
 			}
@@ -278,6 +282,11 @@ func (sf *connection) handlerLoop() {
 // deadline. So run() cannot be wedged by a peer that stops reading, which
 // is what would otherwise stop it servicing its own t1 timer.
 func (sf *connection) sendFrame(apdu []byte) {
+	// Anything we put on the link is link activity, so it pushes back t3
+	// -- the standard measures idleness in either direction. Doing it here
+	// rather than at each call site is why an S-frame acknowledgement or a
+	// STOPDT confirm counts, and not just the I-frames that used to.
+	sf.idleSince = time.Now()
 	select {
 	case sf.sendRaw <- apdu:
 	case <-sf.ctx.Done():
@@ -386,7 +395,13 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 		atomic.StoreUint32(&sf.isActive, inactive)
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
-		_ = conn.Close() // in turn triggers cancel
+		// Cancel before waiting. Closing the connection is not enough on
+		// its own: recvLoop may be handing a frame to a full rcvRaw rather
+		// than reading, and sendLoop may be idle -- neither notices a
+		// closed conn, so without this wg.Wait() below could block for
+		// good.
+		sf.cancel()
+		_ = conn.Close()
 		sf.wg.Wait()
 		sf.role.notifyDown()
 		sf.Debug("run stopped!")
@@ -394,16 +409,14 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 	sf.role.notifyUp()
 
 	// unAckRcvSince is when the oldest not-yet-acknowledged inbound I-frame
-	// arrived; idleSince is when the link last carried anything at all. Both
-	// are zero when there is nothing outstanding to time.
+	// arrived; it is zero when nothing is outstanding.
 	var unAckRcvSince time.Time
-	idleSince := time.Now()
+	sf.idleSince = time.Now()
 
 	for {
 		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
 			if o, ok := sf.sendQueue.Pop(); ok {
-				sf.sendIFrame(o)
-				idleSince = time.Now()
+				sf.sendIFrame(o) // pushes back t3 via sendFrame
 				continue
 			}
 		}
@@ -453,14 +466,13 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			}
 
 			// t3: the link has been idle, send a TESTFR to prove it is alive.
-			if now.Sub(idleSince) >= sf.config.IdleTimeout3 {
-				sf.sendUFrame(uTestFrActive)
+			if now.Sub(sf.idleSince) >= sf.config.IdleTimeout3 {
+				sf.sendUFrame(uTestFrActive) // pushes back t3 via sendFrame
 				sf.testFrAliveSendSince = time.Now()
-				idleSince = sf.testFrAliveSendSince
 			}
 
 		case apdu := <-sf.rcvRaw:
-			idleSince = time.Now() // any I/S/U frame resets the t3 idle timer
+			sf.idleSince = time.Now() // any inbound I/S/U frame is activity too
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:
