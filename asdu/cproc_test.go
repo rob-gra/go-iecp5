@@ -554,7 +554,10 @@ func TestASDU_GetSingleCmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetSingleCmd()
+			got, err := sf.GetSingleCmd()
+			if err != nil {
+				t.Fatalf("GetSingleCmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetSingleCmd() = %v, want %v", got, tt.want)
 			}
@@ -606,7 +609,10 @@ func TestASDU_GetDoubleCmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetDoubleCmd()
+			got, err := sf.GetDoubleCmd()
+			if err != nil {
+				t.Fatalf("GetDoubleCmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetDoubleCmd() = %v, want %v", got, tt.want)
 			}
@@ -657,7 +663,10 @@ func TestASDU_GetStepCmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetStepCmd()
+			got, err := sf.GetStepCmd()
+			if err != nil {
+				t.Fatalf("GetStepCmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetStepCmd() = %v, want %v", got, tt.want)
 			}
@@ -708,7 +717,10 @@ func TestASDU_GetSetpointNormalCmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetSetpointNormalCmd()
+			got, err := sf.GetSetpointNormalCmd()
+			if err != nil {
+				t.Fatalf("GetSetpointNormalCmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetSetpointNormalCmd() = %v, want %v", got, tt.want)
 			}
@@ -759,7 +771,10 @@ func TestASDU_GetSetpointCmdScaled(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetSetpointCmdScaled()
+			got, err := sf.GetSetpointCmdScaled()
+			if err != nil {
+				t.Fatalf("GetSetpointCmdScaled error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetSetpointCmdScaled() = %v, want %v", got, tt.want)
 			}
@@ -812,7 +827,10 @@ func TestASDU_GetSetpointFloatCmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetSetpointFloatCmd()
+			got, err := sf.GetSetpointFloatCmd()
+			if err != nil {
+				t.Fatalf("GetSetpointFloatCmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetSetpointFloatCmd() = %v, want %v", got, tt.want)
 			}
@@ -861,7 +879,10 @@ func TestASDU_GetBitsString32Cmd(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := sf.GetBitsString32Cmd()
+			got, err := sf.GetBitsString32Cmd()
+			if err != nil {
+				t.Fatalf("GetBitsString32Cmd error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetBitsString32Cmd() = %v, want %v", got, tt.want)
 			}

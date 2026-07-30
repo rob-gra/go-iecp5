@@ -1,6 +1,7 @@
 package asdu
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 	"time"
@@ -72,7 +73,6 @@ func TestASDU_SetVariableNumber(t *testing.T) {
 		Params     *Params
 		Identifier Identifier
 		InfoObj    []byte
-		bootstrap  [ASDUSizeMax]byte
 	}
 	type args struct {
 		n int
@@ -91,7 +91,6 @@ func TestASDU_SetVariableNumber(t *testing.T) {
 				Params:     tt.fields.Params,
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.InfoObj,
-				bootstrap:  tt.fields.bootstrap,
 			}
 			if err := this.SetVariableNumber(tt.args.n); (err != nil) != tt.wantErr {
 				t.Errorf("ASDU.SetVariableNumber() error = %v, wantErr %v", err, tt.wantErr)
@@ -105,7 +104,6 @@ func TestASDU_Reply(t *testing.T) {
 		Params     *Params
 		Identifier Identifier
 		InfoObj    []byte
-		bootstrap  [ASDUSizeMax]byte
 	}
 	type args struct {
 		c    Cause
@@ -125,7 +123,6 @@ func TestASDU_Reply(t *testing.T) {
 				Params:     tt.fields.Params,
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.InfoObj,
-				bootstrap:  tt.fields.bootstrap,
 			}
 			if got := this.Reply(tt.args.c, tt.args.addr); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.Reply() = %v, want %v", got, tt.want)
@@ -357,7 +354,10 @@ func TestASDU_UnmarshalBinary(t *testing.T) {
 			if err := this.UnmarshalBinary(tt.args.data); (err != nil) != tt.wantErr {
 				t.Errorf("ASDU.UnmarshalBinary() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if !reflect.DeepEqual(this.infoObj, tt.want) {
+			// bytes.Equal, not reflect.DeepEqual: an ASDU that decoded no
+			// information object may hold a nil slice or an empty one, and
+			// which of the two is not something callers can observe.
+			if !bytes.Equal(this.infoObj, tt.want) {
 				t.Errorf("ASDU.UnmarshalBinary() got % x, want % x", this.infoObj, tt.want)
 			}
 		})

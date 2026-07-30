@@ -1389,7 +1389,10 @@ func TestASDU_GetSinglePoint(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetSinglePoint()
+			got, err := this.GetSinglePoint()
+			if err != nil {
+				t.Fatalf("GetSinglePoint error = %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetSinglePoint() = %v, want %v", got, tt.want)
 			}
@@ -1429,7 +1432,10 @@ func TestASDU_GetSinglePointCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetSinglePoint()
+			got, err := this.GetSinglePoint()
+			if err != nil {
+				t.Fatalf("GetSinglePoint error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -1511,7 +1517,11 @@ func TestASDU_GetDoublePoint(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetDoublePoint(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetDoublePoint()
+			if err != nil {
+				t.Fatalf("GetDoublePoint error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetDoublePoint() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1551,7 +1561,10 @@ func TestASDU_GetDoublePointCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetDoublePoint()
+			got, err := this.GetDoublePoint()
+			if err != nil {
+				t.Fatalf("GetDoublePoint error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -1633,7 +1646,11 @@ func TestASDU_GetStepPosition(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetStepPosition(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetStepPosition()
+			if err != nil {
+				t.Fatalf("GetStepPosition error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetStepPosition() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1673,7 +1690,10 @@ func TestASDU_GetStepPositionCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetStepPosition()
+			got, err := this.GetStepPosition()
+			if err != nil {
+				t.Fatalf("GetStepPosition error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -1755,7 +1775,11 @@ func TestASDU_GetBitString32(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetBitString32(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetBitString32()
+			if err != nil {
+				t.Fatalf("GetBitString32 error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetBitString32() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1794,7 +1818,10 @@ func TestASDU_GetBitString32CP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetBitString32()
+			got, err := this.GetBitString32()
+			if err != nil {
+				t.Fatalf("GetBitString32 error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -1900,7 +1927,11 @@ func TestASDU_GetMeasuredValueNormal(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetMeasuredValueNormal(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetMeasuredValueNormal()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueNormal error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetMeasuredValueNormal() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1940,7 +1971,10 @@ func TestASDU_GetMeasuredValueNormalCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetMeasuredValueNormal()
+			got, err := this.GetMeasuredValueNormal()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueNormal error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -2022,7 +2056,11 @@ func TestASDU_GetMeasuredValueScaled(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetMeasuredValueScaled(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetMeasuredValueScaled()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueScaled error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetMeasuredValueScaled() = %v, want %v", got, tt.want)
 			}
 		})
@@ -2061,7 +2099,10 @@ func TestASDU_GetMeasuredValueScaledCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetMeasuredValueScaled()
+			got, err := this.GetMeasuredValueScaled()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueScaled error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {
@@ -2149,7 +2190,11 @@ func TestASDU_GetMeasuredValueFloat(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			if got := this.GetMeasuredValueFloat(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetMeasuredValueFloat()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueFloat error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetMeasuredValueFloat() = %v, want %v", got, tt.want)
 			}
 		})
@@ -2190,7 +2235,10 @@ func TestASDU_GetMeasuredValueFloatCP24Time2a(t *testing.T) {
 				Identifier: tt.fields.Identifier,
 				infoObj:    tt.fields.infoObj,
 			}
-			got := this.GetMeasuredValueFloat()
+			got, err := this.GetMeasuredValueFloat()
+			if err != nil {
+				t.Fatalf("GetMeasuredValueFloat error = %v", err)
+			}
 			for i, v := range got {
 				isError := false
 				if !reflect.DeepEqual(v.Ioa, tt.want[i].Ioa) {

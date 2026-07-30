@@ -31,6 +31,38 @@ See [`_examples`](./_examples) for runnable master (`cs104.Client`), slave
 (`cs104.Server`), dial-out slave (`cs104.ServerSpecial`), and
 redundant-master server setups.
 
+## Decoding ASDUs
+
+`Append*` builds an information object; the `Get*` accessors read one back.
+Reading is non-destructive and reports failure as a value:
+
+```go
+cmd, err := a.GetSingleCmd()
+if err != nil {
+    // truncated or malformed: err is asdu.ErrInfoObjTruncated or
+    // asdu.ErrTypeIDNotMatch. The ASDU is untouched and still safe to
+    // echo back with a.SendReplyMirror(...).
+}
+```
+
+This matters most when decoding traffic you did not produce -- frames
+lifted out of a capture, or anything from an untrusted peer -- where a
+malformed object is ordinary input rather than a programming error.
+
+### Migrating from the cursor-based API
+
+Decoding used to consume the information object as it read, and signalled
+truncation by panicking. If you are upgrading:
+
+- **`Get*` now returns an extra `error`.** Check it instead of wrapping
+  calls in `recover()`.
+- **Drop `Clone()` before decoding.** `a.Clone().GetSingleCmd()` was
+  required because decoding emptied `a`, which broke a later
+  `SendReplyMirror`. Reading no longer modifies the ASDU, so
+  `a.GetSingleCmd()` is correct on its own.
+- **The exported `Decode*` methods are gone.** They were the cursor
+  plumbing behind `Get*`; use the `Get*` accessor for the type you want.
+
 # Reference
 lib60870 c library [lib60870](https://github.com/mz-automation/lib60870)  
 lib60870 c library doc [lib60870 doc](https://support.mz-automation.de/doc/lib60870/latest/group__CS104__MASTER.html)

@@ -92,11 +92,21 @@ func (handler) DelayAcquisitionHandler(_ asdu.Connect, a *asdu.ASDU) error     {
 func (handler) ASDUHandler(_ asdu.Connect, a *asdu.ASDU) error {
 	switch a.Identifier.Type {
 	case asdu.M_ME_NC_1, asdu.M_ME_TF_1:
-		for _, v := range a.GetMeasuredValueFloat() {
+		values, err := a.GetMeasuredValueFloat()
+		if err != nil {
+			log.Printf("malformed measured value: %v", err)
+			return nil
+		}
+		for _, v := range values {
 			log.Printf("%s = %.1f%%", pointName(v.Ioa), v.Value)
 		}
 	case asdu.M_SP_NA_1, asdu.M_SP_TB_1:
-		for _, v := range a.GetSinglePoint() {
+		values, err := a.GetSinglePoint()
+		if err != nil {
+			log.Printf("malformed single point: %v", err)
+			return nil
+		}
+		for _, v := range values {
 			log.Printf("%s = %v", pointName(v.Ioa), v.Value)
 		}
 	default:

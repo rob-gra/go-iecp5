@@ -102,9 +102,9 @@ func (sf *SrvSession) commonAddrAllowed(ca asdu.CommonAddr) bool {
 // dispatchASDU implements connRole: it validates the ASDU against what this
 // station accepts, then routes it to the application handler.
 //
-// Every Get*Cmd below decodes on a Clone: those accessors consume the
-// information object as they read it, and SendReplyMirror -- here or inside
-// the handler -- needs the original bytes intact to echo back.
+// A malformed information object gets an UnknownIOA reply rather than
+// being passed to the handler: the peer sent something this station cannot
+// act on, and saying so is more use to it than silence.
 func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 	defer func() {
 		if err := recover(); err != nil {
@@ -124,8 +124,8 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 			asduPack.Identifier.Coa.Cause == asdu.Deactivation) {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, qoi := asduPack.Clone().GetInterrogationCmd()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, qoi, err := asduPack.GetInterrogationCmd()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return sf.handler.InterrogationHandler(sf, asduPack, qoi)
@@ -134,8 +134,8 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, qcc := asduPack.Clone().GetCounterInterrogationCmd()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, qcc, err := asduPack.GetCounterInterrogationCmd()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return sf.handler.CounterInterrogationHandler(sf, asduPack, qcc)
@@ -144,14 +144,18 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Request {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		return sf.handler.ReadHandler(sf, asduPack, asduPack.Clone().GetReadCmd())
+		ioa, err := asduPack.GetReadCmd()
+		if err != nil {
+			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
+		}
+		return sf.handler.ReadHandler(sf, asduPack, ioa)
 
 	case asdu.C_CS_NA_1: // ClockSynchronizationCmd
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, tm := asduPack.Clone().GetClockSynchronizationCmd()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, tm, err := asduPack.GetClockSynchronizationCmd()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return sf.handler.ClockSyncHandler(sf, asduPack, tm)
@@ -160,8 +164,8 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, _ := asduPack.Clone().GetTestCommand()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, _, err := asduPack.GetTestCommand()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return asduPack.SendReplyMirror(sf, asdu.ActivationCon)
@@ -170,8 +174,8 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 		if asduPack.Identifier.Coa.Cause != asdu.Activation {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, qrp := asduPack.Clone().GetResetProcessCmd()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, qrp, err := asduPack.GetResetProcessCmd()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return sf.handler.ResetProcessHandler(sf, asduPack, qrp)
@@ -181,8 +185,8 @@ func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 			asduPack.Identifier.Coa.Cause == asdu.Spontaneous) {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownCOT)
 		}
-		ioa, msec := asduPack.Clone().GetDelayAcquireCommand()
-		if ioa != asdu.InfoObjAddrIrrelevant {
+		ioa, msec, err := asduPack.GetDelayAcquireCommand()
+		if err != nil || ioa != asdu.InfoObjAddrIrrelevant {
 			return asduPack.SendReplyMirror(sf, asdu.UnknownIOA)
 		}
 		return sf.handler.DelayAcquisitionHandler(sf, asduPack, msec)

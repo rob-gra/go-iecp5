@@ -228,9 +228,10 @@ func (h *handler) DelayAcquisitionHandler(asdu.Connect, *asdu.ASDU, uint16) erro
 func (h *handler) ASDUHandler(c asdu.Connect, asduPack *asdu.ASDU) error {
 	switch asduPack.Identifier.Type {
 	case asdu.C_SC_NA_1: // start/stop
-		// decode on a clone: Get*Cmd consumes infoObj, and SendReplyMirror
-		// needs the original bytes intact to echo back to the caller.
-		cmd := asduPack.Clone().GetSingleCmd()
+		cmd, err := asduPack.GetSingleCmd()
+		if err != nil {
+			return asduPack.SendReplyMirror(c, asdu.UnknownIOA)
+		}
 		if cmd.Ioa != ioaStartStopCmd {
 			return asduPack.SendReplyMirror(c, asdu.UnknownIOA)
 		}
@@ -243,7 +244,10 @@ func (h *handler) ASDUHandler(c asdu.Connect, asduPack *asdu.ASDU) error {
 		return asduPack.SendReplyMirror(c, asdu.ActivationTerm)
 
 	case asdu.C_SE_NC_1: // output setpoint
-		cmd := asduPack.Clone().GetSetpointFloatCmd()
+		cmd, err := asduPack.GetSetpointFloatCmd()
+		if err != nil {
+			return asduPack.SendReplyMirror(c, asdu.UnknownIOA)
+		}
 		if cmd.Ioa != ioaSetpointCmd {
 			return asduPack.SendReplyMirror(c, asdu.UnknownIOA)
 		}

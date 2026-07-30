@@ -387,135 +387,142 @@ func BitsString32Cmd(c Connect, typeID TypeID, coa CauseOfTransmission, commonAd
 }
 
 // GetSingleCmd [C_SC_NA_1] or [C_SC_TA_1] 获取单命令信息体
-func (sf *ASDU) GetSingleCmd() SingleCommandInfo {
+func (sf *ASDU) GetSingleCmd() (SingleCommandInfo, error) {
+	d := sf.decoder()
 	var s SingleCommandInfo
 
-	s.Ioa = sf.DecodeInfoObjAddr()
-	value := sf.DecodeByte()
+	s.Ioa = d.readInfoObjAddr()
+	value := d.readByte()
 	s.Value = value&0x01 == 0x01
 	s.Qoc = ParseQualifierOfCommand(value & 0xfe)
 
 	switch sf.Type {
 	case C_SC_NA_1:
 	case C_SC_TA_1:
-		s.Time = sf.DecodeCP56Time2a()
+		s.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return SingleCommandInfo{}, ErrTypeIDNotMatch
 	}
 
-	return s
+	return s, d.err
 }
 
 // GetDoubleCmd [C_DC_NA_1] or [C_DC_TA_1] 获取双命令信息体
-func (sf *ASDU) GetDoubleCmd() DoubleCommandInfo {
+func (sf *ASDU) GetDoubleCmd() (DoubleCommandInfo, error) {
+	d := sf.decoder()
 	var cmd DoubleCommandInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	value := sf.DecodeByte()
+	cmd.Ioa = d.readInfoObjAddr()
+	value := d.readByte()
 	cmd.Value = DoubleCommand(value & 0x03)
 	cmd.Qoc = ParseQualifierOfCommand(value & 0xfc)
 
 	switch sf.Type {
 	case C_DC_NA_1:
 	case C_DC_TA_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return DoubleCommandInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
 
 // GetStepCmd [C_RC_NA_1] or [C_RC_TA_1] 获取步调节命令信息体
-func (sf *ASDU) GetStepCmd() StepCommandInfo {
+func (sf *ASDU) GetStepCmd() (StepCommandInfo, error) {
+	d := sf.decoder()
 	var cmd StepCommandInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	value := sf.DecodeByte()
+	cmd.Ioa = d.readInfoObjAddr()
+	value := d.readByte()
 	cmd.Value = StepCommand(value & 0x03)
 	cmd.Qoc = ParseQualifierOfCommand(value & 0xfc)
 
 	switch sf.Type {
 	case C_RC_NA_1:
 	case C_RC_TA_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return StepCommandInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
 
 // GetSetpointNormalCmd [C_SE_NA_1] or [C_SE_TA_1] 获取设定命令,规一化值信息体
-func (sf *ASDU) GetSetpointNormalCmd() SetpointCommandNormalInfo {
+func (sf *ASDU) GetSetpointNormalCmd() (SetpointCommandNormalInfo, error) {
+	d := sf.decoder()
 	var cmd SetpointCommandNormalInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	cmd.Value = sf.DecodeNormalize()
-	cmd.Qos = ParseQualifierOfSetpointCmd(sf.DecodeByte())
+	cmd.Ioa = d.readInfoObjAddr()
+	cmd.Value = d.readNormalize()
+	cmd.Qos = ParseQualifierOfSetpointCmd(d.readByte())
 
 	switch sf.Type {
 	case C_SE_NA_1:
 	case C_SE_TA_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return SetpointCommandNormalInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
 
 // GetSetpointCmdScaled [C_SE_NB_1] or [C_SE_TB_1] 获取设定命令,标度化值信息体
-func (sf *ASDU) GetSetpointCmdScaled() SetpointCommandScaledInfo {
+func (sf *ASDU) GetSetpointCmdScaled() (SetpointCommandScaledInfo, error) {
+	d := sf.decoder()
 	var cmd SetpointCommandScaledInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	cmd.Value = sf.DecodeScaled()
-	cmd.Qos = ParseQualifierOfSetpointCmd(sf.DecodeByte())
+	cmd.Ioa = d.readInfoObjAddr()
+	cmd.Value = d.readScaled()
+	cmd.Qos = ParseQualifierOfSetpointCmd(d.readByte())
 
 	switch sf.Type {
 	case C_SE_NB_1:
 	case C_SE_TB_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return SetpointCommandScaledInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
 
 // GetSetpointFloatCmd [C_SE_NC_1] or [C_SE_TC_1] 获取设定命令，短浮点数信息体
-func (sf *ASDU) GetSetpointFloatCmd() SetpointCommandFloatInfo {
+func (sf *ASDU) GetSetpointFloatCmd() (SetpointCommandFloatInfo, error) {
+	d := sf.decoder()
 	var cmd SetpointCommandFloatInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	cmd.Value = sf.DecodeFloat32()
-	cmd.Qos = ParseQualifierOfSetpointCmd(sf.DecodeByte())
+	cmd.Ioa = d.readInfoObjAddr()
+	cmd.Value = d.readFloat32()
+	cmd.Qos = ParseQualifierOfSetpointCmd(d.readByte())
 
 	switch sf.Type {
 	case C_SE_NC_1:
 	case C_SE_TC_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return SetpointCommandFloatInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
 
 // GetBitsString32Cmd [C_BO_NA_1] or [C_BO_TA_1] 获取比特串命令信息体
-func (sf *ASDU) GetBitsString32Cmd() BitsString32CommandInfo {
+func (sf *ASDU) GetBitsString32Cmd() (BitsString32CommandInfo, error) {
+	d := sf.decoder()
 	var cmd BitsString32CommandInfo
 
-	cmd.Ioa = sf.DecodeInfoObjAddr()
-	cmd.Value = sf.DecodeBitsString32()
+	cmd.Ioa = d.readInfoObjAddr()
+	cmd.Value = d.readBitsString32()
 	switch sf.Type {
 	case C_BO_NA_1:
 	case C_BO_TA_1:
-		cmd.Time = sf.DecodeCP56Time2a()
+		cmd.Time = d.readCP56Time2a()
 	default:
-		panic(ErrTypeIDNotMatch)
+		return BitsString32CommandInfo{}, ErrTypeIDNotMatch
 	}
 
-	return cmd
+	return cmd, d.err
 }
