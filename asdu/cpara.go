@@ -184,49 +184,53 @@ func ParameterActivation(c Connect, coa CauseOfTransmission, ca CommonAddr, p Pa
 }
 
 // GetParameterNormal [P_ME_NA_1]，获取 测量值参数,标度化值 信息体
-func (sf *ASDU) GetParameterNormal() ParameterNormalInfo {
+func (sf *ASDU) GetParameterNormal() (ParameterNormalInfo, error) {
+	d := sf.decoder()
 	// Decoded in explicit statements rather than inline in the composite
 	// literal: each call advances the infoObj cursor, and Go only orders
 	// function calls within an expression -- an index expression like
 	// sf.infoObj[0] is unordered relative to them, so reading the trailing
 	// qualifier that way could observe the cursor either before or after
 	// the fields ahead of it were consumed.
-	ioa := sf.DecodeInfoObjAddr()
-	value := sf.DecodeNormalize()
+	ioa := d.readInfoObjAddr()
+	value := d.readNormalize()
 	return ParameterNormalInfo{
 		Ioa:   ioa,
 		Value: value,
-		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
-	}
+		Qpm:   ParseQualifierOfParamMV(d.readByte()),
+	}, d.err
 }
 
 // GetParameterScaled [P_ME_NB_1]，获取 测量值参数,归一化值 信息体
-func (sf *ASDU) GetParameterScaled() ParameterScaledInfo {
-	ioa := sf.DecodeInfoObjAddr()
-	value := sf.DecodeScaled()
+func (sf *ASDU) GetParameterScaled() (ParameterScaledInfo, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
+	value := d.readScaled()
 	return ParameterScaledInfo{
 		Ioa:   ioa,
 		Value: value,
-		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
-	}
+		Qpm:   ParseQualifierOfParamMV(d.readByte()),
+	}, d.err
 }
 
 // GetParameterFloat [P_ME_NC_1]，获取 测量值参数,短浮点数 信息体
-func (sf *ASDU) GetParameterFloat() ParameterFloatInfo {
-	ioa := sf.DecodeInfoObjAddr()
-	value := sf.DecodeFloat32()
+func (sf *ASDU) GetParameterFloat() (ParameterFloatInfo, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
+	value := d.readFloat32()
 	return ParameterFloatInfo{
 		Ioa:   ioa,
 		Value: value,
-		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
-	}
+		Qpm:   ParseQualifierOfParamMV(d.readByte()),
+	}, d.err
 }
 
 // GetParameterActivation [P_AC_NA_1]，获取 参数激活 信息体
-func (sf *ASDU) GetParameterActivation() ParameterActivationInfo {
-	ioa := sf.DecodeInfoObjAddr()
+func (sf *ASDU) GetParameterActivation() (ParameterActivationInfo, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
 	return ParameterActivationInfo{
 		Ioa: ioa,
-		Qpa: QualifierOfParameterAct(sf.DecodeByte()),
-	}
+		Qpa: QualifierOfParameterAct(d.readByte()),
+	}, d.err
 }

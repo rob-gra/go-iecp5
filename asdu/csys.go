@@ -260,45 +260,53 @@ func TestCommandCP56Time2a(c Connect, coa CauseOfTransmission, ca CommonAddr, t 
 }
 
 // GetInterrogationCmd [C_IC_NA_1] 获取总召唤信息体(信息对象地址，召唤限定词)
-func (sf *ASDU) GetInterrogationCmd() (InfoObjAddr, QualifierOfInterrogation) {
-	ioa := sf.DecodeInfoObjAddr()
-	return ioa, QualifierOfInterrogation(sf.DecodeByte())
+func (sf *ASDU) GetInterrogationCmd() (InfoObjAddr, QualifierOfInterrogation, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
+	return ioa, QualifierOfInterrogation(d.readByte()), d.err
 }
 
 // GetCounterInterrogationCmd [C_CI_NA_1] 获得计量召唤信息体(信息对象地址，计量召唤限定词)
-func (sf *ASDU) GetCounterInterrogationCmd() (InfoObjAddr, QualifierCountCall) {
-	ioa := sf.DecodeInfoObjAddr()
-	return ioa, ParseQualifierCountCall(sf.DecodeByte())
+func (sf *ASDU) GetCounterInterrogationCmd() (InfoObjAddr, QualifierCountCall, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
+	return ioa, ParseQualifierCountCall(d.readByte()), d.err
 }
 
 // GetReadCmd [C_RD_NA_1] 获得读命令信息地址
-func (sf *ASDU) GetReadCmd() InfoObjAddr {
-	return sf.DecodeInfoObjAddr()
+func (sf *ASDU) GetReadCmd() (InfoObjAddr, error) {
+	d := sf.decoder()
+	return d.readInfoObjAddr(), d.err
 }
 
 // GetClockSynchronizationCmd [C_CS_NA_1] 获得时钟同步命令信息体(信息对象地址,时间)
-func (sf *ASDU) GetClockSynchronizationCmd() (InfoObjAddr, time.Time) {
+func (sf *ASDU) GetClockSynchronizationCmd() (InfoObjAddr, time.Time, error) {
+	d := sf.decoder()
 
-	return sf.DecodeInfoObjAddr(), sf.DecodeCP56Time2a()
+	return d.readInfoObjAddr(), d.readCP56Time2a(), d.err
 }
 
 // GetTestCommand [C_TS_NA_1]，获得测试命令信息体(信息对象地址,是否是测试字)
-func (sf *ASDU) GetTestCommand() (InfoObjAddr, bool) {
-	return sf.DecodeInfoObjAddr(), sf.DecodeUint16() == FBPTestWord
+func (sf *ASDU) GetTestCommand() (InfoObjAddr, bool, error) {
+	d := sf.decoder()
+	return d.readInfoObjAddr(), d.readUint16() == FBPTestWord, d.err
 }
 
 // GetResetProcessCmd [C_RP_NA_1] 获得复位进程命令信息体(信息对象地址,复位进程命令限定词)
-func (sf *ASDU) GetResetProcessCmd() (InfoObjAddr, QualifierOfResetProcessCmd) {
-	ioa := sf.DecodeInfoObjAddr()
-	return ioa, QualifierOfResetProcessCmd(sf.DecodeByte())
+func (sf *ASDU) GetResetProcessCmd() (InfoObjAddr, QualifierOfResetProcessCmd, error) {
+	d := sf.decoder()
+	ioa := d.readInfoObjAddr()
+	return ioa, QualifierOfResetProcessCmd(d.readByte()), d.err
 }
 
 // GetDelayAcquireCommand [C_CD_NA_1] 获取延时获取命令信息体(信息对象地址,延时毫秒数)
-func (sf *ASDU) GetDelayAcquireCommand() (InfoObjAddr, uint16) {
-	return sf.DecodeInfoObjAddr(), sf.DecodeUint16()
+func (sf *ASDU) GetDelayAcquireCommand() (InfoObjAddr, uint16, error) {
+	d := sf.decoder()
+	return d.readInfoObjAddr(), d.readUint16(), d.err
 }
 
 // GetTestCommandCP56Time2a [C_TS_TA_1]，获得测试命令信息体(信息对象地址,是否是测试字)
-func (sf *ASDU) GetTestCommandCP56Time2a() (InfoObjAddr, bool, time.Time) {
-	return sf.DecodeInfoObjAddr(), sf.DecodeUint16() == FBPTestWord, sf.DecodeCP56Time2a()
+func (sf *ASDU) GetTestCommandCP56Time2a() (InfoObjAddr, bool, time.Time, error) {
+	d := sf.decoder()
+	return d.readInfoObjAddr(), d.readUint16() == FBPTestWord, d.readCP56Time2a(), d.err
 }

@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/thinkgos/go-iecp5/asdu"
 )
 
 // stubAddr is a net.Addr with an arbitrary fixed string, used to drive
@@ -31,6 +33,21 @@ func (c *stubConn) RemoteAddr() net.Addr             { return c.remote }
 func (c *stubConn) SetDeadline(time.Time) error      { return nil }
 func (c *stubConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *stubConn) SetWriteDeadline(time.Time) error { return nil }
+
+// newGroupTestSession builds a bare SrvSession for driving
+// handleSessionActivated directly, without real run() goroutines, so
+// outcomes don't depend on racing a send loop.
+func newGroupTestSession(srv *Server, groupKey interface{}) *SrvSession {
+	sess := &SrvSession{
+		connection: connection{
+			sendQueue:    srv.queueFor(groupKey),
+			deactivateCh: make(chan struct{}, 1),
+		},
+		redundancyGroupKey: groupKey,
+	}
+	sess.role = sess
+	return sess
+}
 
 func TestServer_groupKeyFor(t *testing.T) {
 	conn := &stubConn{remote: stubAddr("192.168.1.10:2404")}
@@ -167,24 +184,26 @@ func TestServer_ConnectionIsRedundancyGroup_BothStayActive(t *testing.T) {
 	}
 }
 
-// TestServer_HandleSessionActivated_HandsOffQueuedMessages verifies that
-// deactivating a superseded connection doesn't lose whatever it hadn't sent
-// yet: handleSessionActivated must drain the loser's sendQueue into the
-// winner's before asking the loser to deactivate. Exercised directly (not
-// through real run() goroutines over net.Pipe) so the outcome doesn't depend
-// on winning a race against the loser's own send loop draining its queue
-// first.
-func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
+// TestServer_RedundancyGroup_SharesOneSendQueue verifies that undelivered
+// data survives a failover because the group's members share one queue,
+// rather than each holding a private queue that has to be handed over.
+// Exercised directly (not through real run() goroutines over net.Pipe) so
+// the outcome doesn't depend on racing a send loop.
+func TestServer_RedundancyGroup_SharesOneSendQueue(t *testing.T) {
 	srv := NewServer(stubServerHandler{})
 	srv.SetServerMode(ModeSingleRedundancyGroup)
 
 	groupKey := singleRedundancyGroupKey{}
 
-	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	sessA := newGroupTestSession(srv, groupKey)
 	atomic.StoreUint32(&sessA.isActive, active)
 
-	sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey}
+	sessB := newGroupTestSession(srv, groupKey)
 	atomic.StoreUint32(&sessB.isActive, active)
+
+	if sessA.sendQueue != sessB.sendQueue {
+		t.Fatal("connections in one redundancy group must share a single send queue")
+	}
 
 	srv.mux.Lock()
 	srv.sessions[sessA] = struct{}{}
@@ -192,25 +211,59 @@ func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 	srv.mux.Unlock()
 
 	// Record A as the group's active connection first (as its own real
-	// activation would have done), then queue a message for it, before B
+	// activation would have done), then queue data for the group, before B
 	// supersedes it.
 	srv.handleSessionActivated(sessA)
-	sessA.sendQueue.Push([]byte("queued-for-A"))
+	sessA.sendQueue.Push([]byte("queued-for-the-group"))
 
 	srv.handleSessionActivated(sessB)
 
 	got, ok := sessB.sendQueue.Pop()
-	if !ok || string(got) != "queued-for-A" {
-		t.Fatalf("sessB.sendQueue.Pop() = %q, %v, want the handed-off message", got, ok)
-	}
-	if n := sessA.sendQueue.Len(); n != 0 {
-		t.Fatalf("sessA.sendQueue.Len() = %d, want 0 after hand-off", n)
+	if !ok || string(got) != "queued-for-the-group" {
+		t.Fatalf("sessB.sendQueue.Pop() = %q, %v, want the group's undelivered message", got, ok)
 	}
 
 	select {
 	case <-sessA.deactivateCh:
 	default:
 		t.Fatal("sessA.deactivateCh should have received a signal: forceDeactivate was expected")
+	}
+}
+
+// TestServer_Send_DoesNotQueueOntoStandbys is the regression test for the
+// defect that motivated the shared queue: Server.Send used to push a copy
+// onto every session, so a deactivated standby accumulated traffic it could
+// not transmit and then flushed all of it, stale, on taking over. One copy
+// must reach the group, not one per connection in it.
+func TestServer_Send_DoesNotQueueOntoStandbys(t *testing.T) {
+	srv := NewServer(stubServerHandler{})
+	srv.SetServerMode(ModeSingleRedundancyGroup)
+	groupKey := singleRedundancyGroupKey{}
+
+	activeSess := newGroupTestSession(srv, groupKey)
+	standby := newGroupTestSession(srv, groupKey)
+	atomic.StoreUint32(&activeSess.isActive, active)
+	atomic.StoreUint32(&standby.isActive, inactive)
+	atomic.StoreUint32(&activeSess.status, connected)
+	atomic.StoreUint32(&standby.status, connected)
+
+	srv.mux.Lock()
+	srv.sessions[activeSess] = struct{}{}
+	srv.sessions[standby] = struct{}{}
+	srv.mux.Unlock()
+
+	const sends = 5
+	for i := 0; i < sends; i++ {
+		if err := asdu.Single(srv, false, asdu.CauseOfTransmission{Cause: asdu.Spontaneous}, asdu.GlobalCommonAddr,
+			asdu.SinglePointInfo{Ioa: 1, Value: true, Qds: asdu.QDSGood}); err != nil {
+			t.Fatalf("Single() failed: %v", err)
+		}
+	}
+
+	// One copy per send reached the group's single queue -- not one copy
+	// per member, and nothing separately banked on the standby.
+	if got := activeSess.sendQueue.Len(); got != sends {
+		t.Fatalf("group queue holds %d messages, want %d (one per send, not one per connection)", got, sends)
 	}
 }
 
@@ -229,8 +282,8 @@ func TestServer_HandleSessionActivated_ConcurrentActivation_ExactlyOneSuperseded
 		srv.SetServerMode(ModeSingleRedundancyGroup)
 		groupKey := singleRedundancyGroupKey{}
 
-		sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
-		sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+		sessA := newGroupTestSession(srv, groupKey)
+		sessB := newGroupTestSession(srv, groupKey)
 
 		srv.mux.Lock()
 		srv.sessions[sessA] = struct{}{}
@@ -266,7 +319,7 @@ func TestServer_ReleaseSession_ClearsActiveGroupEntry(t *testing.T) {
 	srv.SetServerMode(ModeSingleRedundancyGroup)
 	groupKey := singleRedundancyGroupKey{}
 
-	sess := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	sess := newGroupTestSession(srv, groupKey)
 	atomic.StoreUint32(&sess.isActive, active)
 
 	srv.mux.Lock()
@@ -306,7 +359,7 @@ func TestServer_HandleSessionActivated_SkipsAlreadyInactive(t *testing.T) {
 	srv.SetServerMode(ModeSingleRedundancyGroup)
 	groupKey := singleRedundancyGroupKey{}
 
-	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	sessA := newGroupTestSession(srv, groupKey)
 	atomic.StoreUint32(&sessA.isActive, active)
 	srv.mux.Lock()
 	srv.sessions[sessA] = struct{}{}
@@ -316,7 +369,7 @@ func TestServer_HandleSessionActivated_SkipsAlreadyInactive(t *testing.T) {
 	// A's peer sends STOPDT, so A deactivates itself.
 	atomic.StoreUint32(&sessA.isActive, inactive)
 
-	sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+	sessB := newGroupTestSession(srv, groupKey)
 	atomic.StoreUint32(&sessB.isActive, active)
 	srv.mux.Lock()
 	srv.sessions[sessB] = struct{}{}

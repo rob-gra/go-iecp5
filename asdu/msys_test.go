@@ -63,7 +63,10 @@ func TestASDU_GetEndOfInitialization(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetEndOfInitialization()
+			got, got1, err := this.GetEndOfInitialization()
+			if err != nil {
+				t.Fatalf("GetEndOfInitialization error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetEndOfInitialization() got = %v, want %v", got, tt.want)
 			}

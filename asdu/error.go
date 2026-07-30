@@ -27,14 +27,13 @@ var (
 	ErrNotAnyObjInfo    = errors.New("asdu: not any object information")
 	ErrTypeIDNotMatch   = errors.New("asdu: type identifier doesn't match call or time tag")
 
-	// ErrInfoObjTruncated is panicked by the Decode* methods when fewer
+	// ErrInfoObjTruncated is returned by the Get* accessors when fewer
 	// bytes remain in the information object than the field being decoded
 	// needs. fixInfoObjSize validates the overall information object
-	// length against the declared element count before any Decode* call
-	// runs, so this should only be reachable for malformed/adversarial
-	// input (e.g. a corrupted or truncated capture) rather than
-	// well-formed traffic; callers decoding untrusted input should
-	// recover() around Get*Cmd/GetXxx calls.
+	// length against the declared element count when the ASDU is
+	// unmarshalled, so for well-formed traffic this should not be
+	// reachable; it is what a caller decoding untrusted input -- a
+	// corrupted or truncated capture, say -- gets instead.
 	ErrInfoObjTruncated = errors.New("asdu: information object truncated")
 
 	ErrCmdCause = errors.New("asdu: cause of transmission for command not standard requirement")

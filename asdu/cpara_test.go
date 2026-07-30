@@ -233,7 +233,11 @@ func TestASDU_GetParameterNormal(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			if got := this.GetParameterNormal(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetParameterNormal()
+			if err != nil {
+				t.Fatalf("GetParameterNormal error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetParameterNormal() = %v, want %v", got, tt.want)
 			}
 		})
@@ -270,7 +274,11 @@ func TestASDU_GetParameterScaled(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			if got := this.GetParameterScaled(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetParameterScaled()
+			if err != nil {
+				t.Fatalf("GetParameterScaled error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetParameterScaled() = %v, want %v", got, tt.want)
 			}
 		})
@@ -309,7 +317,11 @@ func TestASDU_GetParameterFloat(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			if got := this.GetParameterFloat(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetParameterFloat()
+			if err != nil {
+				t.Fatalf("GetParameterFloat error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetParameterFloat() = %v, want %v", got, tt.want)
 			}
 		})
@@ -342,7 +354,11 @@ func TestASDU_GetParameterActivation(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			if got := this.GetParameterActivation(); !reflect.DeepEqual(got, tt.want) {
+			got, err := this.GetParameterActivation()
+			if err != nil {
+				t.Fatalf("GetParameterActivation error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ASDU.GetParameterActivation() = %v, want %v", got, tt.want)
 			}
 		})

@@ -302,7 +302,10 @@ func TestASDU_GetInterrogationCmd(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetInterrogationCmd()
+			got, got1, err := this.GetInterrogationCmd()
+			if err != nil {
+				t.Fatalf("GetInterrogationCmd error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetInterrogationCmd() QOI = %v, want %v", got, tt.want)
 			}
@@ -338,7 +341,10 @@ func TestASDU_GetCounterInterrogationCmd(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetCounterInterrogationCmd()
+			got, got1, err := this.GetCounterInterrogationCmd()
+			if err != nil {
+				t.Fatalf("GetCounterInterrogationCmd error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetQuantityInterrogationCmd() InfoObjAddr = %v, want %v", got, tt.want)
 			}
@@ -371,7 +377,10 @@ func TestASDU_GetReadCmd(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got := this.GetReadCmd()
+			got, err := this.GetReadCmd()
+			if err != nil {
+				t.Fatalf("GetReadCmd error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetReadCmd() = %v, want %v", got, tt.want)
 			}
@@ -403,7 +412,10 @@ func TestASDU_GetClockSynchronizationCmd(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetClockSynchronizationCmd()
+			got, got1, err := this.GetClockSynchronizationCmd()
+			if err != nil {
+				t.Fatalf("GetClockSynchronizationCmd error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetClockSynchronizationCmd() InfoObjAddr = %v, want %v", got, tt.want)
 			}
@@ -438,7 +450,10 @@ func TestASDU_GetTestCommand(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetTestCommand()
+			got, got1, err := this.GetTestCommand()
+			if err != nil {
+				t.Fatalf("GetTestCommand error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetTestCommand() InfoObjAddr = %v, want %v", got, tt.want)
 			}
@@ -473,7 +488,10 @@ func TestASDU_GetResetProcessCmd(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetResetProcessCmd()
+			got, got1, err := this.GetResetProcessCmd()
+			if err != nil {
+				t.Fatalf("GetResetProcessCmd error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetResetProcessCmd() InfoObjAddr = %v, want %v", got, tt.want)
 			}
@@ -508,7 +526,10 @@ func TestASDU_GetDelayAcquireCommand(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1 := this.GetDelayAcquireCommand()
+			got, got1, err := this.GetDelayAcquireCommand()
+			if err != nil {
+				t.Fatalf("GetDelayAcquireCommand error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ASDU.GetDelayAcquireCommand() InfoObjAddr = %v, want %v", got, tt.want)
 			}
@@ -545,7 +566,10 @@ func TestASDU_GetTestCommandCP56Time2a(t *testing.T) {
 				Params:  tt.fields.Params,
 				infoObj: tt.fields.infoObj,
 			}
-			got, got1, got2 := sf.GetTestCommandCP56Time2a()
+			got, got1, got2, err := sf.GetTestCommandCP56Time2a()
+			if err != nil {
+				t.Fatalf("GetTestCommandCP56Time2a error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("GetTestCommandCP56Time2a() got = %v, want %v", got, tt.want)
 			}

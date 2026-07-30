@@ -1,7 +1,6 @@
 package cs104
 
 import (
-	"reflect"
 	"testing"
 	"time"
 )
@@ -110,33 +109,5 @@ func TestMessageQueue_Ready(t *testing.T) {
 
 	if _, ok := q.Pop(); !ok {
 		t.Fatal("Pop() after Ready should succeed")
-	}
-}
-
-func TestMessageQueue_DrainTo(t *testing.T) {
-	src := newMessageQueue(10)
-	dst := newMessageQueue(10)
-
-	src.Push([]byte("a"))
-	src.Push([]byte("b"))
-	dst.Push([]byte("existing"))
-
-	src.DrainTo(dst)
-
-	if src.Len() != 0 {
-		t.Fatalf("src.Len() = %d, want 0 after DrainTo", src.Len())
-	}
-
-	var got [][]byte
-	for {
-		v, ok := dst.Pop()
-		if !ok {
-			break
-		}
-		got = append(got, v)
-	}
-	want := [][]byte{[]byte("existing"), []byte("a"), []byte("b")}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("dst contents = %q, want %q", got, want)
 	}
 }

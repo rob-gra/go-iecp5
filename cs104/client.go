@@ -7,11 +7,7 @@ package cs104
 import (
 	"context"
 	"errors"
-	"io"
 	"math/rand"
-	"net"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,63 +20,54 @@ const (
 	active
 )
 
-// Client is an IEC104 master
+// Client is an IEC104 master: the controlling station, which dials out and
+// issues STARTDT/STOPDT. The connection state machine itself is shared with
+// SrvSession, see connection.
 type Client struct {
+	connection
+
 	option  ClientOption
-	conn    net.Conn
 	handler ClientHandlerInterface
 
-	// channel
-	rcvASDU chan []byte // for received asdu
-	rcvRaw  chan []byte // for recvLoop raw cs104 frame
-	sendRaw chan []byte // for sendLoop raw cs104 frame
+	// startDtActiveSendSince and stopDtActiveSendSince are when a STARTDT or
+	// STOPDT activation was sent and is still awaiting confirmation; the
+	// zero time means none is outstanding. Held in an atomic.Value because
+	// SendStartDt/SendStopDt are called from the application's goroutine
+	// while run reads them from its own.
+	startDtActiveSendSince atomic.Value
+	stopDtActiveSendSince  atomic.Value
 
-	// sendQueue holds outbound ASDU payloads awaiting transmission. Unlike
-	// the channels above, it survives a reconnect: see messageQueue.
-	sendQueue *messageQueue
-
-	// I帧的发送与接收序号
-	seqNoSend uint16 // sequence number of next outbound I-frame
-	ackNoSend uint16 // outbound sequence number yet to be confirmed
-	seqNoRcv  uint16 // sequence number of next inbound I-frame
-	ackNoRcv  uint16 // inbound sequence number yet to be confirmed
-
-	// maps sendTime I-frames to their respective sequence number
-	pending []seqPending
-
-	startDtActiveSendSince atomic.Value // 当发送startDtActive时,等待确认回复的超时间隔
-	stopDtActiveSendSince  atomic.Value // 当发起stopDtActive时,等待确认回复的超时
-
-	// 连接状态
-	status   uint32
-	rwMux    sync.RWMutex
-	isActive uint32
-
-	// 其他
-	clog.Clog
-
-	wg          sync.WaitGroup
-	ctx         context.Context
-	cancel      context.CancelFunc
 	closeCancel context.CancelFunc
 
 	onConnect        func(c *Client)
 	onConnectionLost func(c *Client)
 }
 
-// NewClient returns an IEC104 master,default config and default asdu.ParamsWide params
+// NewClient returns an IEC104 master, default config and default asdu.ParamsWide params
 func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
-	return &Client{
+	c := &Client{
+		connection: connection{
+			config:    &o.config,
+			params:    &o.params,
+			rcvASDU:   make(chan []byte, o.config.RecvUnAckLimitW<<4),
+			sendQueue: newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
+			rcvRaw:    make(chan []byte, o.config.RecvUnAckLimitW<<5),
+			sendRaw:   make(chan []byte, o.config.SendUnAckLimitK<<5),
+			Clog:      clog.NewLogger("cs104 client => "),
+		},
 		option:           *o,
 		handler:          handler,
-		rcvASDU:          make(chan []byte, o.config.RecvUnAckLimitW<<4),
-		sendQueue:        newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
-		rcvRaw:           make(chan []byte, o.config.RecvUnAckLimitW<<5),
-		sendRaw:          make(chan []byte, o.config.SendUnAckLimitK<<5), // may not block!
-		Clog:             clog.NewLogger("cs104 client => "),
 		onConnect:        func(*Client) {},
 		onConnectionLost: func(*Client) {},
 	}
+	c.role = c
+	// The config and params the connection reads must be the Client's own
+	// copy of the option, not the caller's, which it may reuse or mutate.
+	c.connection.config = &c.option.config
+	c.connection.params = &c.option.params
+	c.startDtActiveSendSince.Store(time.Time{})
+	c.stopDtActiveSendSince.Store(time.Time{})
+	return c
 }
 
 // SetOnConnectHandler set on connect handler
@@ -109,7 +96,7 @@ func (sf *Client) Start() error {
 	return nil
 }
 
-// Connect is
+// running dials the remote server, runs the connection, and reconnects.
 func (sf *Client) running() {
 	var ctx context.Context
 
@@ -153,322 +140,44 @@ func (sf *Client) running() {
 	}
 }
 
-func (sf *Client) recvLoop(conn net.Conn) {
-	sf.Debug("recvLoop started")
-	defer func() {
-		sf.cancel()
-		sf.wg.Done()
-		sf.Debug("recvLoop stopped")
-	}()
-
-	for {
-		apdu, err := ReadAPDU(conn)
-		if err != nil {
-			if err == io.EOF {
-				sf.Error("remote connect closed, %v", err)
-			} else {
-				sf.Error("receive failed, %v", err)
-			}
-			return
-		}
-		sf.Debug("RX Raw[% x]", apdu)
-		sf.rcvRaw <- apdu
-	}
-}
-
-func (sf *Client) sendLoop(conn net.Conn) {
-	sf.Debug("sendLoop started")
-	defer func() {
-		sf.cancel()
-		sf.wg.Done()
-		sf.Debug("sendLoop stopped")
-	}()
-	for {
-		select {
-		case <-sf.ctx.Done():
-			return
-		case apdu := <-sf.sendRaw:
-			sf.Debug("TX Raw[% x]", apdu)
-			for wrCnt := 0; len(apdu) > wrCnt; {
-				byteCount, err := conn.Write(apdu[wrCnt:])
-				if err != nil {
-					// See: https://github.com/golang/go/issues/4373
-					if err != io.EOF && err != io.ErrClosedPipe ||
-						strings.Contains(err.Error(), "use of closed network connection") {
-						sf.Error("sendRaw failed, %v", err)
-						return
-					}
-					if e, ok := err.(net.Error); !ok || !e.Temporary() {
-						sf.Error("sendRaw failed, %v", err)
-						return
-					}
-					// temporary error may be recoverable
-				}
-				wrCnt += byteCount
-			}
-		}
-	}
-}
-
-// run is the big fat state machine.
-func (sf *Client) run(ctx context.Context, conn net.Conn) {
-	sf.Debug("run started!")
-	// before any thing make sure init
-	sf.cleanUp()
-	sf.setConn(conn)
-
-	sf.ctx, sf.cancel = context.WithCancel(ctx)
-	sf.setConnectStatus(connected)
-	sf.wg.Add(3)
-	go sf.recvLoop(conn)
-	go sf.sendLoop(conn)
-	go sf.handlerLoop()
-
-	var checkTicker = time.NewTicker(timeoutResolution)
-
-	// transmission timestamps for timeout calculation
-	var willNotTimeout = time.Now().Add(time.Hour * 24 * 365 * 100)
-
-	var unAckRcvSince = willNotTimeout
-	var idleTimeout3Sine = time.Now()         // 空闲间隔发起testFrAlive
-	var testFrAliveSendSince = willNotTimeout // 当发起testFrAlive时,等待确认回复的超时间隔
-
-	sf.startDtActiveSendSince.Store(willNotTimeout)
-	sf.stopDtActiveSendSince.Store(willNotTimeout)
-
-	sendSFrame := func(rcvSN uint16) {
-		sf.Debug("TX sFrame %v", sAPCI{rcvSN})
-		sf.sendRaw <- newSFrame(rcvSN)
-	}
-
-	sendIFrame := func(asdu1 []byte) {
-		seqNo := sf.seqNoSend
-
-		iframe, err := newIFrame(seqNo, sf.seqNoRcv, asdu1)
-		if err != nil {
-			return
-		}
-		sf.ackNoRcv = sf.seqNoRcv
-		sf.seqNoSend = (seqNo + 1) & 32767
-		sf.pending = append(sf.pending, seqPending{seqNo & 32767, time.Now()})
-
-		sf.Debug("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
-		sf.sendRaw <- iframe
-	}
-
-	defer func() {
-		// default: STOPDT, when connected establish and not enable "data transfer" yet
+// handleUFrame implements connRole. The controlling station issues the
+// activations, so it is the confirmations it has to act on.
+func (sf *Client) handleUFrame(function byte) {
+	switch function {
+	case uStartDtConfirm:
+		atomic.StoreUint32(&sf.isActive, active)
+		sf.startDtActiveSendSince.Store(time.Time{})
+	case uStopDtConfirm:
 		atomic.StoreUint32(&sf.isActive, inactive)
-		sf.setConnectStatus(disconnected)
-		checkTicker.Stop()
-		_ = conn.Close() // 连锁引发cancel
-		sf.wg.Wait()
-		sf.onConnectionLost(sf)
-		sf.Debug("run stopped!")
-	}()
-
-	sf.onConnect(sf)
-	for {
-		if atomic.LoadUint32(&sf.isActive) == active && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.option.config.SendUnAckLimitK {
-			if o, ok := sf.sendQueue.Pop(); ok {
-				sendIFrame(o)
-				idleTimeout3Sine = time.Now()
-				continue
-			}
-		}
-		select {
-		case <-sf.ctx.Done():
-			return
-		case <-sf.sendQueue.Ready():
-			continue
-		case now := <-checkTicker.C:
-			// check all timeouts
-			if now.Sub(testFrAliveSendSince) >= sf.option.config.SendUnAckTimeout1 ||
-				now.Sub(sf.startDtActiveSendSince.Load().(time.Time)) >= sf.option.config.SendUnAckTimeout1 ||
-				now.Sub(sf.stopDtActiveSendSince.Load().(time.Time)) >= sf.option.config.SendUnAckTimeout1 {
-				sf.Error("test frame alive confirm timeout t₁")
-				return
-			}
-			// check oldest unacknowledged outbound
-			if sf.ackNoSend != sf.seqNoSend &&
-				//now.Sub(sf.peek()) >= sf.SendUnAckTimeout1 {
-				now.Sub(sf.pending[0].sendTime) >= sf.option.config.SendUnAckTimeout1 {
-				sf.ackNoSend++
-				sf.Error("fatal transmission timeout t₁")
-				return
-			}
-
-			// 确定最早发送的i-Frame是否超时,超时则回复sFrame
-			if sf.ackNoRcv != sf.seqNoRcv &&
-				(now.Sub(unAckRcvSince) >= sf.option.config.RecvUnAckTimeout2 ||
-					now.Sub(idleTimeout3Sine) >= timeoutResolution) {
-				sendSFrame(sf.seqNoRcv)
-				sf.ackNoRcv = sf.seqNoRcv
-			}
-
-			// 空闲时间到，发送TestFrActive帧,保活
-			if now.Sub(idleTimeout3Sine) >= sf.option.config.IdleTimeout3 {
-				sf.sendUFrame(uTestFrActive)
-				testFrAliveSendSince = time.Now()
-				idleTimeout3Sine = testFrAliveSendSince
-			}
-
-		case apdu := <-sf.rcvRaw:
-			idleTimeout3Sine = time.Now() // 每收到一个i帧,S帧,U帧, 重置空闲定时器, t3
-			apci, asduVal := parse(apdu)
-			switch head := apci.(type) {
-			case sAPCI:
-				sf.Debug("RX sFrame %v", head)
-				if !sf.updateAckNoOut(head.rcvSN) {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
-					return
-				}
-
-			case iAPCI:
-				sf.Debug("RX iFrame %v", head)
-				if atomic.LoadUint32(&sf.isActive) == inactive {
-					sf.Warn("station not active")
-					break // not active, discard apdu
-				}
-				if !sf.updateAckNoOut(head.rcvSN) || head.sendSN != sf.seqNoRcv {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
-					return
-				}
-
-				sf.rcvASDU <- asduVal
-				if sf.ackNoRcv == sf.seqNoRcv { // first unacked
-					unAckRcvSince = time.Now()
-				}
-
-				sf.seqNoRcv = (sf.seqNoRcv + 1) & 32767
-				if seqNoCount(sf.ackNoRcv, sf.seqNoRcv) >= sf.option.config.RecvUnAckLimitW {
-					sendSFrame(sf.seqNoRcv)
-					sf.ackNoRcv = sf.seqNoRcv
-				}
-
-			case uAPCI:
-				sf.Debug("RX uFrame %v", head)
-				switch head.function {
-				//case uStartDtActive:
-				//	sf.sendUFrame(uStartDtConfirm)
-				//	atomic.StoreUint32(&sf.isActive, active)
-				case uStartDtConfirm:
-					atomic.StoreUint32(&sf.isActive, active)
-					sf.startDtActiveSendSince.Store(willNotTimeout)
-				//case uStopDtActive:
-				//	sf.sendUFrame(uStopDtConfirm)
-				//	atomic.StoreUint32(&sf.isActive, inactive)
-				case uStopDtConfirm:
-					atomic.StoreUint32(&sf.isActive, inactive)
-					sf.stopDtActiveSendSince.Store(willNotTimeout)
-				case uTestFrActive:
-					sf.sendUFrame(uTestFrConfirm)
-				case uTestFrConfirm:
-					testFrAliveSendSince = willNotTimeout
-				default:
-					sf.Error("illegal U-Frame functions[0x%02x] ignored", head.function)
-				}
-			}
-		}
+		sf.stopDtActiveSendSince.Store(time.Time{})
+	case uTestFrActive:
+		sf.sendUFrame(uTestFrConfirm)
+	case uTestFrConfirm:
+		sf.testFrAliveSendSince = time.Time{}
+	default:
+		sf.Error("illegal U-Frame functions[0x%02x] ignored", function)
 	}
 }
 
-func (sf *Client) handlerLoop() {
-	sf.Debug("handlerLoop started")
-	defer func() {
-		sf.wg.Done()
-		sf.Debug("handlerLoop stopped")
-	}()
-
-	for {
-		select {
-		case <-sf.ctx.Done():
-			return
-		case rawAsdu := <-sf.rcvASDU:
-			asduPack := asdu.NewEmptyASDU(&sf.option.params)
-			if err := asduPack.UnmarshalBinary(rawAsdu); err != nil {
-				sf.Warn("asdu UnmarshalBinary failed,%+v", err)
-				continue
-			}
-			if err := sf.clientHandler(asduPack); err != nil {
-				sf.Warn("Falied handling I frame, error: %v", err)
-			}
+// roleTimedOut implements connRole: t₁ also covers the STARTDT and STOPDT
+// activations that only the controlling station sends.
+func (sf *Client) roleTimedOut(now time.Time) bool {
+	for _, v := range []*atomic.Value{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
+		since, _ := v.Load().(time.Time)
+		if !since.IsZero() && now.Sub(since) >= sf.option.config.SendUnAckTimeout1 {
+			sf.Error("start/stop data transfer confirm timeout t₁")
+			return true
 		}
 	}
+	return false
 }
 
-func (sf *Client) setConnectStatus(status uint32) {
-	sf.rwMux.Lock()
-	atomic.StoreUint32(&sf.status, status)
-	sf.rwMux.Unlock()
-}
+func (sf *Client) notifyUp()   { sf.onConnect(sf) }
+func (sf *Client) notifyDown() { sf.onConnectionLost(sf) }
 
-func (sf *Client) connectStatus() uint32 {
-	sf.rwMux.RLock()
-	status := atomic.LoadUint32(&sf.status)
-	sf.rwMux.RUnlock()
-	return status
-}
-
-// setConn stores conn for UnderlyingConn to read. The client rebinds to a
-// new conn on every reconnect, so reads and writes must be synchronized.
-func (sf *Client) setConn(conn net.Conn) {
-	sf.rwMux.Lock()
-	sf.conn = conn
-	sf.rwMux.Unlock()
-}
-
-func (sf *Client) getConn() net.Conn {
-	sf.rwMux.RLock()
-	conn := sf.conn
-	sf.rwMux.RUnlock()
-	return conn
-}
-
-func (sf *Client) cleanUp() {
-	sf.ackNoRcv = 0
-	sf.ackNoSend = 0
-	sf.seqNoRcv = 0
-	sf.seqNoSend = 0
-	sf.pending = nil
-	// clear the raw-frame and inbound-ASDU buffers: they're tied to the
-	// sequence-number state of the connection that just ended, so replaying
-	// them makes no sense. sendQueue is deliberately left untouched, so
-	// outbound messages the caller queued survive the reconnect.
-loop:
-	for {
-		select {
-		case <-sf.sendRaw:
-		case <-sf.rcvRaw:
-		case <-sf.rcvASDU:
-		default:
-			break loop
-		}
-	}
-}
-
-func (sf *Client) sendUFrame(which byte) {
-	sf.Debug("TX uFrame %v", uAPCI{which})
-	sf.sendRaw <- newUFrame(which)
-}
-
-func (sf *Client) updateAckNoOut(ackNo uint16) (ok bool) {
-	pending, ok := confirmSeqNo(sf.pending, sf.ackNoSend, sf.seqNoSend, ackNo)
-	if !ok {
-		return false
-	}
-	sf.pending = pending
-	sf.ackNoSend = ackNo
-	return true
-}
-
-// IsConnected get server session connected state
-func (sf *Client) IsConnected() bool {
-	return sf.connectStatus() == connected
-}
-
-// clientHandler hand response handler
-func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
+// dispatchASDU implements connRole, routing a received ASDU to the
+// application's handler.
+func (sf *Client) dispatchASDU(asduPack *asdu.ASDU) error {
 	defer func() {
 		if err := recover(); err != nil {
 			sf.Critical("client handler %+v", err)
@@ -503,32 +212,12 @@ func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
 	return sf.handler.ASDUHandler(sf, asduPack)
 }
 
-// Params returns params of client
-func (sf *Client) Params() *asdu.Params {
-	return &sf.option.params
-}
-
 // Send send asdu
 func (sf *Client) Send(a *asdu.ASDU) error {
-	if !sf.IsConnected() {
-		return ErrUseClosedConnection
-	}
-	if atomic.LoadUint32(&sf.isActive) == inactive {
+	if !sf.IsActive() {
 		return ErrNotActive
 	}
-	data, err := a.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	if sf.sendQueue.Push(data) {
-		sf.Warn("send queue full, dropped the oldest unsent message")
-	}
-	return nil
-}
-
-// UnderlyingConn returns underlying conn of client
-func (sf *Client) UnderlyingConn() net.Conn {
-	return sf.getConn()
+	return sf.connection.Send(a)
 }
 
 // Close close all
@@ -553,7 +242,7 @@ func (sf *Client) SendStopDt() {
 	sf.sendUFrame(uStopDtActive)
 }
 
-//InterrogationCmd wrap asdu.InterrogationCmd
+// InterrogationCmd wrap asdu.InterrogationCmd
 func (sf *Client) InterrogationCmd(coa asdu.CauseOfTransmission, ca asdu.CommonAddr, qoi asdu.QualifierOfInterrogation) error {
 	return asdu.InterrogationCmd(sf, coa, ca, qoi)
 }

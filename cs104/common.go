@@ -43,6 +43,12 @@ func prevSeqNo(seq uint16) uint16 {
 	return (seq - 1) & (seqNoModulus - 1)
 }
 
+// nextSeqNo returns (seq+1) mod 32768, the sequence number immediately
+// following seq in the 15-bit I-frame sequence space.
+func nextSeqNo(seq uint16) uint16 {
+	return (seq + 1) & (seqNoModulus - 1)
+}
+
 // confirmSeqNo validates an incoming ack (rcvSN) against the outstanding
 // pending queue of sent I-frames identified by ackNoSend..seqNoSend. If
 // ackNo is valid, it returns the pending queue trimmed of every entry the

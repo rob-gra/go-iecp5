@@ -114,16 +114,15 @@ func (id Identifier) String() string {
 type ASDU struct {
 	*Params
 	Identifier
-	infoObj   []byte            // information object serial
-	bootstrap [ASDUSizeMax]byte // prevents Info malloc
+	// infoObj is the information object serial. Decoding never modifies it
+	// -- the cursor lives on decoder, not here -- so an ASDU stays intact
+	// after being read and can be echoed back or read again.
+	infoObj []byte
 }
 
 // NewEmptyASDU new empty asdu with special params
 func NewEmptyASDU(p *Params) *ASDU {
-	a := &ASDU{Params: p}
-	lenDUI := a.IdentifierSize()
-	a.infoObj = a.bootstrap[lenDUI:lenDUI]
-	return a
+	return &ASDU{Params: p}
 }
 
 // NewASDU new asdu with special params and identifier
@@ -159,10 +158,13 @@ func (sf *ASDU) SetVariableNumber(n int) error {
 //	})
 //}
 
-// Reply returns a new "responding" ASDU which addresses "initiating" addr with a copy of Info.
+// Reply returns a new "responding" ASDU addressed to addr, carrying cause c
+// and a copy of this ASDU's information object. The receiver is not
+// modified.
 func (sf *ASDU) Reply(c Cause, addr CommonAddr) *ASDU {
-	sf.CommonAddr = addr
-	r := NewASDU(sf.Params, sf.Identifier)
+	id := sf.Identifier
+	id.CommonAddr = addr
+	r := NewASDU(sf.Params, id)
 	r.Coa.Cause = c
 	r.infoObj = append(r.infoObj, sf.infoObj...)
 	return r
@@ -243,7 +245,9 @@ func (sf *ASDU) MarshalBinary() (data []byte, err error) {
 		return nil, ErrParam
 	}
 
-	raw := sf.bootstrap[:(sf.IdentifierSize() + len(sf.infoObj))]
+	lenDUI := sf.IdentifierSize()
+	raw := make([]byte, lenDUI+len(sf.infoObj))
+	copy(raw[lenDUI:], sf.infoObj)
 	raw[0] = byte(sf.Type)
 	raw[1] = sf.Variable.Value()
 	raw[2] = sf.Coa.Value()
@@ -298,7 +302,7 @@ func (sf *ASDU) UnmarshalBinary(rawAsdu []byte) error {
 		sf.CommonAddr = CommonAddr(rawAsdu[lenDUI-2]) | CommonAddr(rawAsdu[lenDUI-1])<<8
 	}
 	// information object
-	sf.infoObj = append(sf.bootstrap[lenDUI:lenDUI], rawAsdu[lenDUI:]...)
+	sf.infoObj = append(sf.infoObj[:0], rawAsdu[lenDUI:]...)
 	return sf.fixInfoObjSize()
 }
 

@@ -15,9 +15,10 @@ import (
 	"github.com/thinkgos/go-iecp5/clog"
 )
 
-// timeoutResolution is seconds according to companion standard 104,
-// subclass 6.9, caption "Definition of time outs". However, then
-// of a second make this system much more responsive i.c.w. S-frames.
+// timeoutResolution is how often the connection state machine re-checks
+// its timers. The companion standard defines t0-t3 in whole seconds (104,
+// subclass 6.9, "Definition of time outs"); this only bounds how late a
+// timer may be noticed, so it is finer than a second.
 const timeoutResolution = 100 * time.Millisecond
 
 // Server the common server
@@ -37,7 +38,14 @@ type Server struct {
 	// currently recorded as that group's active connection. See
 	// handleSessionActivated for why this is authoritative state rather than
 	// something re-derived from each session's IsActive() flag.
-	activeByGroup    map[interface{}]*SrvSession
+	activeByGroup map[interface{}]*SrvSession
+	// groupQueues holds the outbound queue shared by all connections in a
+	// redundancy group. The data belongs to the group, not to whichever
+	// connection happens to be carrying it, so members share one queue and
+	// only the active one drains it -- a standby that takes over simply
+	// continues where its predecessor left off. Ungrouped connections are
+	// absent here and own a private queue instead.
+	groupQueues      map[interface{}]*messageQueue
 	commonAddrFilter func(asdu.CommonAddr) bool
 	// maxConnections caps concurrent sessions; zero means unlimited. See
 	// SetMaxConnections.
@@ -58,6 +66,7 @@ func NewServer(handler ServerHandlerInterface) *Server {
 		handler:       handler,
 		sessions:      make(map[*SrvSession]struct{}),
 		activeByGroup: make(map[interface{}]*SrvSession),
+		groupQueues:   make(map[interface{}]*messageQueue),
 		Clog:          clog.NewLogger("cs104 server => "),
 	}
 }
@@ -160,22 +169,25 @@ func (sf *Server) AllowClientIPs(ips ...string) *Server {
 // ListenAndServer's accept loop so it can be driven directly in tests
 // without a real net.Listener.
 func (sf *Server) newSession(conn net.Conn) *SrvSession {
-	return &SrvSession{
-		config:    &sf.config,
-		params:    &sf.params,
-		handler:   sf.handler,
-		rcvASDU:   make(chan []byte, sf.config.RecvUnAckLimitW<<4),
-		sendQueue: newMessageQueue(int(sf.config.SendUnAckLimitK) << 4),
-		rcvRaw:    make(chan []byte, sf.config.RecvUnAckLimitW<<5),
-		sendRaw:   make(chan []byte, sf.config.SendUnAckLimitK<<5), // may not block!
-
+	sess := &SrvSession{
+		connection: connection{
+			config:  &sf.config,
+			params:  &sf.params,
+			rcvASDU: make(chan []byte, sf.config.RecvUnAckLimitW<<4),
+			rcvRaw:  make(chan []byte, sf.config.RecvUnAckLimitW<<5),
+			sendRaw: make(chan []byte, sf.config.SendUnAckLimitK<<5),
+			Clog:    sf.Clog,
+		},
+		handler:            sf.handler,
 		onConnection:       sf.onConnection,
 		connectionLost:     sf.connectionLost,
 		onActivate:         sf.handleSessionActivated,
 		redundancyGroupKey: sf.groupKeyFor(conn),
 		commonAddrFilter:   sf.commonAddrFilter,
-		Clog:               sf.Clog,
 	}
+	sess.role = sess
+	sess.sendQueue = sf.queueFor(sess.redundancyGroupKey)
+	return sess
 }
 
 // ListenAndServer run the server
@@ -287,13 +299,56 @@ func (sf *Server) Close() error {
 	return err
 }
 
-// Send imp interface Connect
-func (sf *Server) Send(a *asdu.ASDU) error {
-	sf.mux.Lock()
-	for k := range sf.sessions {
-		_ = k.Send(a.Clone())
+// queueFor returns the outbound queue a session with the given
+// redundancy-group key should use: the group's shared queue, created on
+// first use, or a private queue for an ungrouped connection.
+//
+// A group's queue outlives its connections on purpose. It is where data for
+// that group accumulates, so a group whose members are all momentarily
+// disconnected still buffers (bounded, oldest-evicted) until one of them
+// reconnects, rather than dropping everything on the floor.
+func (sf *Server) queueFor(key interface{}) *messageQueue {
+	size := int(sf.config.SendUnAckLimitK) << 4
+	if key == nil {
+		return newMessageQueue(size)
 	}
-	sf.mux.Unlock()
+
+	sf.mux.Lock()
+	defer sf.mux.Unlock()
+	if q, ok := sf.groupQueues[key]; ok {
+		return q
+	}
+	q := newMessageQueue(size)
+	sf.groupQueues[key] = q
+	return q
+}
+
+// Send imp interface Connect. It queues one copy of a per destination:
+// once per redundancy group (whose members share a queue and of which only
+// the active one transmits) and once per ungrouped connection.
+//
+// Sending to a group rather than to each of its connections is what keeps a
+// standby from accumulating traffic it can never transmit and then flushing
+// it, stale, when it takes over.
+func (sf *Server) Send(a *asdu.ASDU) error {
+	data, err := a.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	sf.mux.Lock()
+	defer sf.mux.Unlock()
+
+	for _, q := range sf.groupQueues {
+		if q.Push(data) {
+			sf.Warn("send queue full, dropped the oldest unsent message")
+		}
+	}
+	for sess := range sf.sessions {
+		if sess.redundancyGroupKey == nil && sess.IsConnected() {
+			sess.enqueue(data)
+		}
+	}
 	return nil
 }
 
