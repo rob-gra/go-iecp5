@@ -112,53 +112,17 @@ func (sf *SrvSession) recvLoop(conn net.Conn) {
 	}()
 
 	for {
-		rawData := make([]byte, APDUSizeMax)
-		for rdCnt, length := 0, 2; rdCnt < length; {
-			byteCount, err := io.ReadFull(conn, rawData[rdCnt:length])
-			if err != nil {
-				// See: https://github.com/golang/go/issues/4373
-				if err != io.EOF && err != io.ErrClosedPipe ||
-					strings.Contains(err.Error(), "use of closed network connection") {
-					sf.Error("receive failed, %v", err)
-					return
-				}
-
-				if e, ok := err.(net.Error); ok && !e.Temporary() {
-					sf.Error("receive failed, %v", err)
-					return
-				}
-
-				if byteCount == 0 && err == io.EOF {
-					sf.Error("remote connect closed, %v", err)
-					return
-				}
-			}
-
-			rdCnt += byteCount
-			if rdCnt == 0 {
-				continue
-			} else if rdCnt == 1 {
-				if rawData[0] != startFrame {
-					rdCnt = 0
-					continue
-				}
+		apdu, err := ReadAPDU(conn)
+		if err != nil {
+			if err == io.EOF {
+				sf.Error("remote connect closed, %v", err)
 			} else {
-				if rawData[0] != startFrame {
-					rdCnt, length = 0, 2
-					continue
-				}
-				length = int(rawData[1]) + 2
-				if length < APCICtlFiledSize+2 || length > APDUSizeMax {
-					rdCnt, length = 0, 2
-					continue
-				}
-				if rdCnt == length {
-					apdu := rawData[:length]
-					sf.Debug("RX Raw[% x]", apdu)
-					sf.rcvRaw <- apdu
-				}
+				sf.Error("receive failed, %v", err)
 			}
+			return
 		}
+		sf.Debug("RX Raw[% x]", apdu)
+		sf.rcvRaw <- apdu
 	}
 }
 

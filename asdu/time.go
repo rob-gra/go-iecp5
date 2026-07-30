@@ -101,5 +101,8 @@ func CP16Time2a(msec uint16) []byte {
 // ParseCP16Time2a 2个八位位组二进制时间,读2字节,返回一个值
 // See companion standard 101, subclass 7.2.6.20.
 func ParseCP16Time2a(b []byte) uint16 {
+	if len(b) < 2 {
+		return 0
+	}
 	return binary.LittleEndian.Uint16(b)
 }

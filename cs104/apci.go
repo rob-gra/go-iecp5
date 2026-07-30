@@ -6,6 +6,7 @@ package cs104
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/thinkgos/go-iecp5/asdu"
 )
@@ -114,7 +115,11 @@ type APCI struct {
 	ctr1, ctr2, ctr3, ctr4 byte
 }
 
-// return frame type , APCI, remain data
+// parse returns the frame type, APCI, and remaining data. apdu must be at
+// least 6 bytes (APCICtlFiledSize+2); callers are expected to have already
+// validated the frame length, e.g. via ReadAPDU or recvLoop's own framing.
+// See ParseAPCI for a bounds-checked, exported equivalent suitable for
+// arbitrary/untrusted input.
 func parse(apdu []byte) (interface{}, []byte) {
 	apci := APCI{apdu[0], apdu[1], apdu[2], apdu[3], apdu[4], apdu[5]}
 	if apci.ctr1&0x01 == 0 {
@@ -132,4 +137,23 @@ func parse(apdu []byte) (interface{}, []byte) {
 	return uAPCI{
 		function: apci.ctr1 & 0xfc,
 	}, apdu[6:]
+}
+
+// ParseAPCI parses a raw APDU frame's 6-byte control field into its APCI
+// form (an iAPCI, sAPCI, or uAPCI) and returns the remaining ASDU payload
+// bytes. apdu is normally a complete frame as returned by ReadAPDU (a start
+// byte, a length byte, and the declared number of following bytes);
+// ParseAPCI does not itself validate the start byte or the declared length
+// against len(apdu), only that apdu is long enough to contain a control
+// field at all.
+//
+// Unlike the package's internal frame handling, ParseAPCI is exported and
+// bounds-checked so it can be used to decode APDUs from sources other than
+// a live connection, e.g. frames extracted from a pcap capture.
+func ParseAPCI(apdu []byte) (apci interface{}, asduPayload []byte, err error) {
+	if len(apdu) < APCICtlFiledSize+2 {
+		return nil, nil, io.ErrUnexpectedEOF
+	}
+	apci, asduPayload = parse(apdu)
+	return apci, asduPayload, nil
 }
