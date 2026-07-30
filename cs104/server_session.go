@@ -5,7 +5,6 @@
 package cs104
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -36,7 +35,7 @@ type SrvSession struct {
 	// redundancyGroupKey groups this session together with other sessions
 	// sharing the same non-nil key: see Server.groupKeyFor. A nil key means
 	// this session isn't part of any redundancy group.
-	redundancyGroupKey interface{}
+	redundancyGroupKey any
 	// commonAddrFilter, if set, decides whether this session is responsible
 	// for a given common address (station address); see
 	// Server.SetCommonAddrFilter/AllowCommonAddrs. Nil means every CA other
@@ -50,12 +49,12 @@ func (sf *SrvSession) handleUFrame(function byte) {
 	switch function {
 	case uStartDtActive:
 		sf.sendUFrame(uStartDtConfirm)
-		if atomic.SwapUint32(&sf.isActive, active) != active && sf.onActivate != nil {
+		if !sf.isActive.Swap(true) && sf.onActivate != nil {
 			sf.onActivate(sf)
 		}
 	case uStopDtActive:
 		sf.sendUFrame(uStopDtConfirm)
-		atomic.StoreUint32(&sf.isActive, inactive)
+		sf.isActive.Store(false)
 	case uTestFrActive:
 		sf.sendUFrame(uTestFrConfirm)
 	case uTestFrConfirm:

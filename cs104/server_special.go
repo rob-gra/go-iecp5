@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"math/rand"
-	"sync/atomic"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -85,13 +84,13 @@ func (sf *serverSpec) Start() error {
 func (sf *serverSpec) running() {
 	var ctx context.Context
 
-	sf.rwMux.Lock()
-	if !atomic.CompareAndSwapUint32(&sf.status, initial, disconnected) {
-		sf.rwMux.Unlock()
+	sf.connMu.Lock()
+	if !sf.status.CompareAndSwap(initial, disconnected) {
+		sf.connMu.Unlock()
 		return
 	}
 	ctx, sf.closeCancel = context.WithCancel(context.Background())
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	defer sf.setConnectStatus(initial)
 
 	for {
@@ -129,10 +128,10 @@ func (sf *serverSpec) IsClosed() bool {
 }
 
 func (sf *serverSpec) Close() error {
-	sf.rwMux.Lock()
+	sf.connMu.Lock()
 	if sf.closeCancel != nil {
 		sf.closeCancel()
 	}
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	return nil
 }

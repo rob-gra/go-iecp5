@@ -15,11 +15,6 @@ import (
 	"github.com/thinkgos/go-iecp5/clog"
 )
 
-const (
-	inactive = iota
-	active
-)
-
 // Client is an IEC104 master: the controlling station, which dials out and
 // issues STARTDT/STOPDT. The connection state machine itself is shared with
 // SrvSession, see connection.
@@ -29,13 +24,18 @@ type Client struct {
 	option  ClientOption
 	handler ClientHandlerInterface
 
-	// startDtActiveSendSince and stopDtActiveSendSince are when a STARTDT or
-	// STOPDT activation was sent and is still awaiting confirmation; the
-	// zero time means none is outstanding. Held in an atomic.Value because
-	// SendStartDt/SendStopDt are called from the application's goroutine
-	// while run reads them from its own.
-	startDtActiveSendSince atomic.Value
-	stopDtActiveSendSince  atomic.Value
+	// startDtActiveSendSince and stopDtActiveSendSince are when a STARTDT
+	// or STOPDT activation was sent and is still awaiting confirmation, in
+	// Unix nanoseconds; zero means none is outstanding. Atomic because
+	// SendStartDt/SendStopDt run on the application's goroutine while run
+	// reads them from its own.
+	//
+	// An int64 rather than an atomic.Value holding a time.Time: Value
+	// hands back any, and the assertion unwrapping it yields the
+	// zero time on failure -- indistinguishable from "not waiting", so a
+	// missed confirmation would go unnoticed rather than time out.
+	startDtActiveSendSince atomic.Int64
+	stopDtActiveSendSince  atomic.Int64
 
 	closeCancel context.CancelFunc
 
@@ -63,8 +63,6 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 	// which it may reuse or mutate after NewClient returns.
 	c.config = &c.option.config
 	c.params = &c.option.params
-	c.startDtActiveSendSince.Store(time.Time{})
-	c.stopDtActiveSendSince.Store(time.Time{})
 	return c
 }
 
@@ -98,13 +96,13 @@ func (sf *Client) Start() error {
 func (sf *Client) running() {
 	var ctx context.Context
 
-	sf.rwMux.Lock()
-	if !atomic.CompareAndSwapUint32(&sf.status, initial, disconnected) {
-		sf.rwMux.Unlock()
+	sf.connMu.Lock()
+	if !sf.status.CompareAndSwap(initial, disconnected) {
+		sf.connMu.Unlock()
 		return
 	}
 	ctx, sf.closeCancel = context.WithCancel(context.Background())
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	defer sf.setConnectStatus(initial)
 
 	for {
@@ -143,11 +141,11 @@ func (sf *Client) running() {
 func (sf *Client) handleUFrame(function byte) {
 	switch function {
 	case uStartDtConfirm:
-		atomic.StoreUint32(&sf.isActive, active)
-		sf.startDtActiveSendSince.Store(time.Time{})
+		sf.isActive.Store(true)
+		sf.startDtActiveSendSince.Store(0)
 	case uStopDtConfirm:
-		atomic.StoreUint32(&sf.isActive, inactive)
-		sf.stopDtActiveSendSince.Store(time.Time{})
+		sf.isActive.Store(false)
+		sf.stopDtActiveSendSince.Store(0)
 	case uTestFrActive:
 		sf.sendUFrame(uTestFrConfirm)
 	case uTestFrConfirm:
@@ -160,9 +158,9 @@ func (sf *Client) handleUFrame(function byte) {
 // roleTimedOut implements connRole: t₁ also covers the STARTDT and STOPDT
 // activations that only the controlling station sends.
 func (sf *Client) roleTimedOut(now time.Time) bool {
-	for _, v := range []*atomic.Value{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
-		since, _ := v.Load().(time.Time)
-		if !since.IsZero() && now.Sub(since) >= sf.option.config.SendUnAckTimeout1 {
+	for _, v := range []*atomic.Int64{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
+		since := v.Load()
+		if since != 0 && now.Sub(time.Unix(0, since)) >= sf.option.config.SendUnAckTimeout1 {
 			sf.Error("start/stop data transfer confirm timeout t₁")
 			return true
 		}
@@ -226,24 +224,24 @@ func (sf *Client) Send(a *asdu.ASDU) error {
 
 // Close close all
 func (sf *Client) Close() error {
-	sf.rwMux.Lock()
+	sf.connMu.Lock()
 	if sf.closeCancel != nil {
 		sf.closeCancel()
 	}
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	return nil
 }
 
 // SendStartDt start data transmission on this connection
 func (sf *Client) SendStartDt() {
-	sf.startDtActiveSendSince.Store(time.Now())
-	sf.offerUFrame(uStartDtActive)
+	sf.startDtActiveSendSince.Store(time.Now().UnixNano())
+	sf.trySendUFrame(uStartDtActive)
 }
 
 // SendStopDt stop data transmission on this connection
 func (sf *Client) SendStopDt() {
-	sf.stopDtActiveSendSince.Store(time.Now())
-	sf.offerUFrame(uStopDtActive)
+	sf.stopDtActiveSendSince.Store(time.Now().UnixNano())
+	sf.trySendUFrame(uStopDtActive)
 }
 
 // InterrogationCmd wrap asdu.InterrogationCmd
