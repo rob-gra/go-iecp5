@@ -39,6 +39,11 @@ type connRole interface {
 	// notifyUp and notifyDown inform the application of connection state.
 	// They are separate from the connRole's own bookkeeping because the two
 	// roles hand the application different receiver types.
+	//
+	// notifyUp fires once the connection is established, before STARTDT has
+	// completed -- deliberately, since issuing STARTDT is the usual thing to
+	// do from it. Data transfer is not enabled yet at that point, and Send
+	// reports ErrNotActive until it is.
 	notifyUp()
 	notifyDown()
 }
@@ -69,13 +74,16 @@ type connection struct {
 	ackNoRcv  uint16 // inbound sequence number yet to be confirmed
 	pending   []seqPending
 
-	status   uint32
+	status   uint32 // atomic
 	isActive uint32 // atomic: active/inactive
-	rwMux    sync.RWMutex
+	// connMu guards the state that is rebound when a connection is
+	// (re)established: conn here, and closeCancel on the types that
+	// reconnect. status and isActive are atomics and need no lock.
+	connMu sync.RWMutex
 
 	// idleSince is when the link last carried traffic in either
 	// direction, which is what t3 measures. Only run's goroutine touches
-	// it (sendFrame runs there too); offerFrame deliberately does not.
+	// it (sendFrame runs there too); trySendFrame deliberately does not.
 	idleSince time.Time
 
 	// testFrAliveSendSince is when a TESTFR act was sent and is still
@@ -122,31 +130,26 @@ func (sf *connection) forceDeactivate() {
 }
 
 func (sf *connection) setConnectStatus(status uint32) {
-	sf.rwMux.Lock()
 	atomic.StoreUint32(&sf.status, status)
-	sf.rwMux.Unlock()
 }
 
 func (sf *connection) connectStatus() uint32 {
-	sf.rwMux.RLock()
-	status := atomic.LoadUint32(&sf.status)
-	sf.rwMux.RUnlock()
-	return status
+	return atomic.LoadUint32(&sf.status)
 }
 
 // setConn stores conn for UnderlyingConn to read. Client and ServerSpecial
 // rebind the same value to a new conn on every reconnect, so reads and
 // writes must be synchronized.
 func (sf *connection) setConn(conn net.Conn) {
-	sf.rwMux.Lock()
+	sf.connMu.Lock()
 	sf.conn = conn
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 }
 
 func (sf *connection) getConn() net.Conn {
-	sf.rwMux.RLock()
+	sf.connMu.RLock()
 	conn := sf.conn
-	sf.rwMux.RUnlock()
+	sf.connMu.RUnlock()
 	return conn
 }
 
@@ -158,6 +161,12 @@ func (sf *connection) Send(u *asdu.ASDU) error {
 	data, err := u.MarshalBinary()
 	if err != nil {
 		return err
+	}
+	// Checked here so the caller hears about it. Past this point the ASDU
+	// is just bytes on a queue, and the only thing left to do with one too
+	// long to frame is drop it.
+	if len(data) > asdu.ASDUSizeMax {
+		return asdu.ErrLengthOutOfRange
 	}
 	sf.enqueue(data)
 	return nil
@@ -286,6 +295,10 @@ func (sf *connection) sendFrame(apdu []byte) {
 	// -- the standard measures idleness in either direction. Doing it here
 	// rather than at each call site is why an S-frame acknowledgement or a
 	// STOPDT confirm counts, and not just the I-frames that used to.
+	//
+	// This marks when the frame was queued, not when it reached the wire;
+	// the two differ only when sendLoop is backed up, which its write
+	// deadline already bounds to t1.
 	sf.idleSince = time.Now()
 	select {
 	case sf.sendRaw <- apdu:
@@ -293,12 +306,12 @@ func (sf *connection) sendFrame(apdu []byte) {
 	}
 }
 
-// offerFrame is sendFrame for callers outside run's goroutine: the
+// trySendFrame is sendFrame for callers outside run's goroutine: the
 // application issuing STARTDT/STOPDT. It neither blocks nor touches the
 // context run owns, and drops the frame if the buffer is somehow full --
 // these are rare, un-sequenced control frames, so losing one costs a
 // retry rather than the connection.
-func (sf *connection) offerFrame(apdu []byte) {
+func (sf *connection) trySendFrame(apdu []byte) {
 	select {
 	case sf.sendRaw <- apdu:
 	default:
@@ -316,10 +329,10 @@ func (sf *connection) sendUFrame(which byte) {
 	sf.sendFrame(newUFrame(which))
 }
 
-// offerUFrame is sendUFrame for callers outside run's goroutine.
-func (sf *connection) offerUFrame(which byte) {
+// trySendUFrame is sendUFrame for callers outside run's goroutine.
+func (sf *connection) trySendUFrame(which byte) {
 	sf.Debug("TX uFrame %v", uAPCI{which})
-	sf.offerFrame(newUFrame(which))
+	sf.trySendFrame(newUFrame(which))
 }
 
 func (sf *connection) sendIFrame(asdu1 []byte) {
@@ -327,6 +340,12 @@ func (sf *connection) sendIFrame(asdu1 []byte) {
 
 	iframe, err := newIFrame(seqNo, sf.seqNoRcv, asdu1)
 	if err != nil {
+		// Only reachable for an over-long ASDU, which Send rejects up
+		// front -- but say so rather than dropping it in silence, since a
+		// message that vanishes with no trace is the worst thing to have
+		// to diagnose from the far end of a link. Nothing has been
+		// committed yet: the sequence number is still unspent.
+		sf.Error("dropping outbound ASDU: %v", err)
 		return
 	}
 	sf.ackNoRcv = sf.seqNoRcv
@@ -363,14 +382,19 @@ func (sf *connection) cleanUp() {
 	// sequence-number state of the connection that just ended, so replaying
 	// them makes no sense. sendQueue is deliberately left untouched, so
 	// outbound messages the caller queued survive the reconnect.
-loop:
+	drain(sf.sendRaw)
+	drain(sf.rcvRaw)
+	drain(sf.rcvASDU)
+}
+
+// drain empties ch without blocking. Safe here because run's goroutines
+// have all finished by the time cleanUp runs, so nothing is refilling it.
+func drain(ch chan []byte) {
 	for {
 		select {
-		case <-sf.sendRaw:
-		case <-sf.rcvRaw:
-		case <-sf.rcvASDU:
+		case <-ch:
 		default:
-			break loop
+			return
 		}
 	}
 }
@@ -448,7 +472,10 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			if sf.role.roleTimedOut(now) {
 				return
 			}
-			// t1: the oldest unacknowledged outbound I-frame went unanswered.
+			// t1: the oldest unacknowledged outbound I-frame went
+			// unanswered. pending holds exactly the frames between
+			// ackNoSend and seqNoSend, so it is non-empty whenever those
+			// two differ -- which is what makes pending[0] safe here.
 			if sf.ackNoSend != sf.seqNoSend &&
 				now.Sub(sf.pending[0].sendTime) >= sf.config.SendUnAckTimeout1 {
 				sf.Error("fatal transmission timeout t₁")

@@ -98,13 +98,13 @@ func (sf *Client) Start() error {
 func (sf *Client) running() {
 	var ctx context.Context
 
-	sf.rwMux.Lock()
+	sf.connMu.Lock()
 	if !atomic.CompareAndSwapUint32(&sf.status, initial, disconnected) {
-		sf.rwMux.Unlock()
+		sf.connMu.Unlock()
 		return
 	}
 	ctx, sf.closeCancel = context.WithCancel(context.Background())
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	defer sf.setConnectStatus(initial)
 
 	for {
@@ -226,24 +226,24 @@ func (sf *Client) Send(a *asdu.ASDU) error {
 
 // Close close all
 func (sf *Client) Close() error {
-	sf.rwMux.Lock()
+	sf.connMu.Lock()
 	if sf.closeCancel != nil {
 		sf.closeCancel()
 	}
-	sf.rwMux.Unlock()
+	sf.connMu.Unlock()
 	return nil
 }
 
 // SendStartDt start data transmission on this connection
 func (sf *Client) SendStartDt() {
 	sf.startDtActiveSendSince.Store(time.Now())
-	sf.offerUFrame(uStartDtActive)
+	sf.trySendUFrame(uStartDtActive)
 }
 
 // SendStopDt stop data transmission on this connection
 func (sf *Client) SendStopDt() {
 	sf.stopDtActiveSendSince.Store(time.Now())
-	sf.offerUFrame(uStopDtActive)
+	sf.trySendUFrame(uStopDtActive)
 }
 
 // InterrogationCmd wrap asdu.InterrogationCmd

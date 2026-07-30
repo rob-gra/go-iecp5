@@ -92,11 +92,11 @@ func buildTestMonitorASDU(t *testing.T) []byte {
 	return data
 }
 
-// TestConnection_OfferFrame_DoesNotBlockWhenBufferFull covers the path used
+// TestConnection_TrySendFrame_DoesNotBlockWhenBufferFull covers the path used
 // by callers outside run's goroutine (the application issuing
 // STARTDT/STOPDT): it must never block them, and must not touch the
 // context run owns.
-func TestConnection_OfferFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
+func TestConnection_TrySendFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 2),
 		Clog:    clog.NewLogger("test cs104 => "),
@@ -106,14 +106,14 @@ func TestConnection_OfferFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 50; i++ {
-			sf.offerUFrame(uStartDtActive)
+			sf.trySendUFrame(uStartDtActive)
 		}
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("offerFrame blocked once sendRaw filled")
+		t.Fatal("trySendFrame blocked once sendRaw filled")
 	}
 
 	if got := len(sf.sendRaw); got != 2 {
@@ -275,5 +275,38 @@ func TestConnection_CloseDoesNotFreeBlockedRecvLoop(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("recvLoop stayed parked even after cancel")
+	}
+}
+
+// TestConnection_SendRejectsOverlongASDU covers the one path that used to
+// lose a message without a word. ASDU.MarshalBinary does not bound the
+// information object, so an application can build one too long to frame;
+// newIFrame then refused it inside the state machine and sendIFrame
+// returned, dropping it silently. The caller is told now, while it still
+// has the ASDU and can do something about it.
+func TestConnection_SendRejectsOverlongASDU(t *testing.T) {
+	c, peer := newTestClient(t, fastTestConfig())
+	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
+
+	c.SendStartDt()
+	readFrame(t, peer)
+	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	waitFor(t, time.Second, c.IsActive)
+
+	u := asdu.NewASDU(asdu.ParamsWide, asdu.Identifier{
+		Type:       asdu.M_SP_NA_1,
+		Variable:   asdu.VariableStruct{IsSequence: false, Number: 1},
+		Coa:        asdu.CauseOfTransmission{Cause: asdu.Spontaneous},
+		CommonAddr: asdu.GlobalCommonAddr,
+	})
+	u.AppendBytes(make([]byte, asdu.ASDUSizeMax+1)...)
+
+	if err := c.Send(u); err != asdu.ErrLengthOutOfRange {
+		t.Fatalf("Send() of an over-long ASDU = %v, want asdu.ErrLengthOutOfRange", err)
+	}
+
+	// Rejecting it must not have disturbed the connection or the sequence.
+	if !c.IsConnected() || !c.IsActive() {
+		t.Fatal("rejecting an over-long ASDU should leave the connection untouched")
 	}
 }
