@@ -39,6 +39,11 @@ func newMessageQueue(max int) *messageQueue {
 func (q *messageQueue) Push(data []byte) (evicted bool) {
 	q.mu.Lock()
 	if len(q.items) >= q.max {
+		// Clear the slot before reslicing: q.items[1:] only moves the slice
+		// header, so without this the backing array keeps referencing the
+		// evicted payload (preventing its GC) until some future append
+		// happens to grow and reallocate the array.
+		q.items[0] = nil
 		q.items = q.items[1:]
 		evicted = true
 	}
@@ -61,6 +66,10 @@ func (q *messageQueue) Pop() ([]byte, bool) {
 		return nil, false
 	}
 	data := q.items[0]
+	// See the matching comment in Push: clear the slot before reslicing so
+	// the backing array doesn't keep the popped payload alive longer than
+	// necessary.
+	q.items[0] = nil
 	q.items = q.items[1:]
 
 	if len(q.items) > 0 {

@@ -53,6 +53,45 @@ func TestMessageQueue_EvictsOldestWhenFull(t *testing.T) {
 	}
 }
 
+// TestMessageQueue_PopAndEvict_ClearBackingSlot guards against a memory
+// retention bug: q.items[1:] alone only moves the slice header forward, so
+// without explicitly nil-ing the vacated slot first, the backing array
+// keeps referencing an already-popped/evicted payload until some later
+// append happens to grow and reallocate the array -- delaying GC of
+// payloads that are logically gone from the queue.
+func TestMessageQueue_PopAndEvict_ClearBackingSlot(t *testing.T) {
+	t.Run("Pop", func(t *testing.T) {
+		q := newMessageQueue(10)
+		q.Push([]byte("a"))
+		q.Push([]byte("b"))
+
+		// Captured before Pop: shares the same backing array, so index 0
+		// lets us observe the slot Pop vacates even after q.items itself
+		// has been resliced past it.
+		beforePop := q.items
+
+		if _, ok := q.Pop(); !ok {
+			t.Fatal("Pop() ok = false, want true")
+		}
+		if beforePop[0] != nil {
+			t.Fatal("Pop() left the vacated backing-array slot non-nil")
+		}
+	})
+
+	t.Run("Push eviction", func(t *testing.T) {
+		q := newMessageQueue(1)
+		q.Push([]byte("a"))
+		beforeEvict := q.items
+
+		if evicted := q.Push([]byte("b")); !evicted {
+			t.Fatal("Push() into full queue should report eviction")
+		}
+		if beforeEvict[0] != nil {
+			t.Fatal("Push() eviction left the vacated backing-array slot non-nil")
+		}
+	})
+}
+
 func TestMessageQueue_Ready(t *testing.T) {
 	q := newMessageQueue(10)
 

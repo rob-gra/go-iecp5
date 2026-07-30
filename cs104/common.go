@@ -67,6 +67,18 @@ func confirmSeqNo(pending []seqPending, ackNoSend, seqNoSend, ackNo uint16) (_ [
 	return pending, true
 }
 
+// hostOnly strips the port from a net.Addr's string form, e.g.
+// "192.168.1.10:2404" -> "192.168.1.10". Addresses that don't parse as
+// host:port (unusual for TCP, but not guaranteed by the net.Addr interface)
+// are returned unchanged.
+func hostOnly(addr net.Addr) string {
+	host := addr.String()
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return host
+}
+
 // commonAddrSetFilter returns a filter function that accepts exactly the
 // given common addresses. Used by AllowCommonAddrs on both Server and
 // ClientOption as a convenience over SetCommonAddrFilter for the common

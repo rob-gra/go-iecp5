@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -181,7 +182,6 @@ func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 
 	sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
 	atomic.StoreUint32(&sessA.isActive, active)
-	sessA.sendQueue.Push([]byte("queued-for-A"))
 
 	sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey}
 	atomic.StoreUint32(&sessB.isActive, active)
@@ -190,6 +190,12 @@ func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 	srv.sessions[sessA] = struct{}{}
 	srv.sessions[sessB] = struct{}{}
 	srv.mux.Unlock()
+
+	// Record A as the group's active connection first (as its own real
+	// activation would have done), then queue a message for it, before B
+	// supersedes it.
+	srv.handleSessionActivated(sessA)
+	sessA.sendQueue.Push([]byte("queued-for-A"))
 
 	srv.handleSessionActivated(sessB)
 
@@ -205,5 +211,48 @@ func TestServer_HandleSessionActivated_HandsOffQueuedMessages(t *testing.T) {
 	case <-sessA.deactivateCh:
 	default:
 		t.Fatal("sessA.deactivateCh should have received a signal: forceDeactivate was expected")
+	}
+}
+
+// TestServer_HandleSessionActivated_ConcurrentActivation_ExactlyOneSuperseded
+// guards against a race where two sessions in the same redundancy group
+// activate at nearly the same instant (e.g. two masters both issuing
+// STARTDT within microseconds of each other during a failover). Naively
+// re-deriving "who else is active" from each session's own IsActive() flag
+// lets both concurrent calls see the other as the one to supersede, so both
+// end up deactivated and the group ends up with no active connection at
+// all. handleSessionActivated must instead guarantee exactly one of the two
+// is ever told to deactivate, regardless of scheduling order.
+func TestServer_HandleSessionActivated_ConcurrentActivation_ExactlyOneSuperseded(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		srv := NewServer(stubServerHandler{})
+		srv.SetServerMode(ModeSingleRedundancyGroup)
+		groupKey := singleRedundancyGroupKey{}
+
+		sessA := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+		sessB := &SrvSession{sendQueue: newMessageQueue(10), redundancyGroupKey: groupKey, deactivateCh: make(chan struct{}, 1)}
+
+		srv.mux.Lock()
+		srv.sessions[sessA] = struct{}{}
+		srv.sessions[sessB] = struct{}{}
+		srv.mux.Unlock()
+
+		// Simulate both sessions' run() goroutines completing their atomic
+		// isActive swap (as happens on receiving STARTDT_ACT) before either
+		// one's onActivate/handleSessionActivated call runs.
+		atomic.StoreUint32(&sessA.isActive, active)
+		atomic.StoreUint32(&sessB.isActive, active)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); srv.handleSessionActivated(sessA) }()
+		go func() { defer wg.Done(); srv.handleSessionActivated(sessB) }()
+		wg.Wait()
+
+		aSignaled := len(sessA.deactivateCh) == 1
+		bSignaled := len(sessB.deactivateCh) == 1
+		if aSignaled == bSignaled { // both true or both false: bug
+			t.Fatalf("iteration %d: A deactivate-signaled=%v B deactivate-signaled=%v, want exactly one", i, aSignaled, bSignaled)
+		}
 	}
 }
