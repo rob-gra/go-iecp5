@@ -211,9 +211,7 @@ func (sf *Server) ListenAndServer(addr string) {
 		sf.wg.Add(1)
 		go func() {
 			sess.run(ctx, conn)
-			sf.mux.Lock()
-			delete(sf.sessions, sess)
-			sf.mux.Unlock()
+			sf.releaseSession(sess)
 			sf.wg.Done()
 		}()
 	}
@@ -232,19 +230,47 @@ func (sf *Server) acceptSession(conn net.Conn) *SrvSession {
 		return nil
 	}
 
-	sess := sf.newSession(conn)
-
+	// Check the cap before building the session, not after: newSession
+	// allocates several channels sized from Config (with a large k/w those
+	// run to megabytes each), and a peer hammering a server that's already
+	// at capacity is exactly the case the cap exists to contain -- building
+	// and immediately discarding that state per rejected connection would
+	// hand the flood back much of the cost the cap is meant to deny it.
+	//
+	// A single check suffices: ListenAndServer calls this synchronously from
+	// its one accept-loop goroutine, so no other admission can race this
+	// one, and the only concurrent mutation of sf.sessions is releaseSession
+	// removing an entry -- which can only free capacity, never consume it.
 	sf.mux.Lock()
-	if sf.maxConnections > 0 && len(sf.sessions) >= sf.maxConnections {
-		sf.mux.Unlock()
+	atCapacity := sf.maxConnections > 0 && len(sf.sessions) >= sf.maxConnections
+	sf.mux.Unlock()
+	if atCapacity {
 		sf.Warn("rejected connection from %v: max connections (%d) reached", conn.RemoteAddr(), sf.maxConnections)
 		_ = conn.Close()
 		return nil
 	}
+
+	sess := sf.newSession(conn)
+
+	sf.mux.Lock()
 	sf.sessions[sess] = struct{}{}
 	sf.mux.Unlock()
 
 	return sess
+}
+
+// releaseSession removes a finished session's server-side state, freeing a
+// slot against SetMaxConnections' cap. Clearing the redundancy-group entry
+// matters beyond bookkeeping: activeByGroup holds the session by pointer, so
+// leaving a disconnected session recorded there would keep it (and its
+// buffers) reachable for as long as the server runs.
+func (sf *Server) releaseSession(sess *SrvSession) {
+	sf.mux.Lock()
+	delete(sf.sessions, sess)
+	if sess.redundancyGroupKey != nil && sf.activeByGroup[sess.redundancyGroupKey] == sess {
+		delete(sf.activeByGroup, sess.redundancyGroupKey)
+	}
+	sf.mux.Unlock()
 }
 
 // Close close the server

@@ -109,3 +109,56 @@ func TestParseCP24Time2a_ShortSliceReturnsZeroTime(t *testing.T) {
 		t.Errorf("ParseCP24Time2a(short) = %v, want zero time", got)
 	}
 }
+
+// TestGetCmd_PanicsWithErrInfoObjTruncated covers the Get* accessors that
+// read a trailing qualifier byte after the information object address.
+// These used to index sf.infoObj[0] directly, which on a truncated frame
+// panicked with a raw runtime bounds error instead of the package's
+// documented ErrInfoObjTruncated -- indistinguishable, from a caller
+// decoding untrusted captures, from a genuine bug in this library.
+func TestGetCmd_PanicsWithErrInfoObjTruncated(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(a *ASDU)
+	}{
+		{"GetInterrogationCmd", func(a *ASDU) { a.GetInterrogationCmd() }},
+		{"GetCounterInterrogationCmd", func(a *ASDU) { a.GetCounterInterrogationCmd() }},
+		{"GetResetProcessCmd", func(a *ASDU) { a.GetResetProcessCmd() }},
+		{"GetEndOfInitialization", func(a *ASDU) { a.GetEndOfInitialization() }},
+		{"GetParameterActivation", func(a *ASDU) { a.GetParameterActivation() }},
+		{"GetParameterNormal", func(a *ASDU) { a.GetParameterNormal() }},
+		{"GetParameterScaled", func(a *ASDU) { a.GetParameterScaled() }},
+		{"GetParameterFloat", func(a *ASDU) { a.GetParameterFloat() }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// ParamsWide addresses are 3 bytes, so an infoObj holding only
+			// the address is truncated for every accessor here: each needs
+			// at least one more byte for its trailing qualifier.
+			a := newTruncatedASDU(t, 3)
+			mustPanic(t, tt.name, func() { tt.call(a) })
+		})
+	}
+}
+
+// TestGetCmd_QualifierReadAfterAddress pins the decode order: the trailing
+// qualifier must come from the byte *after* the information object address,
+// never from the address's own first byte. Go orders function calls within
+// an expression but leaves index expressions unordered relative to them, so
+// reading the qualifier as sf.infoObj[0] inline alongside a cursor-advancing
+// call left this to the compiler rather than to the code.
+func TestGetCmd_QualifierReadAfterAddress(t *testing.T) {
+	p := *ParamsWide
+	a := NewEmptyASDU(&p)
+	// 3-byte IOA 0x010203, then the qualifier byte.
+	a.infoObj = append(a.infoObj, 0x03, 0x02, 0x01, byte(QOIStation))
+
+	ioa, qoi := a.GetInterrogationCmd()
+	if ioa != 0x010203 {
+		t.Errorf("InfoObjAddr = %#x, want 0x010203", ioa)
+	}
+	if qoi != QOIStation {
+		t.Errorf("QualifierOfInterrogation = %d, want %d (the byte after the address, not inside it)", qoi, QOIStation)
+	}
+}

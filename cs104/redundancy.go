@@ -120,6 +120,16 @@ func (sf *Server) handleSessionActivated(activated *SrvSession) {
 	if prev == nil || prev == activated {
 		return
 	}
+	// prev is the session this one supersedes, but it may have gone inactive
+	// on its own in the meantime -- it processed a STOPDT from its peer, or
+	// its connection dropped. There's nothing to supersede in that case, and
+	// deactivating it anyway would send a redundant unsolicited STOPDT
+	// confirm to a peer that already stopped. Note this only gates *whether*
+	// we signal the session picked above; it never re-derives *which* one,
+	// which is what made the concurrent-activation race possible.
+	if !prev.IsActive() {
+		return
+	}
 
 	sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
 	// Hand off whatever the superseded connection hadn't sent yet to the

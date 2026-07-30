@@ -185,35 +185,48 @@ func ParameterActivation(c Connect, coa CauseOfTransmission, ca CommonAddr, p Pa
 
 // GetParameterNormal [P_ME_NA_1]，获取 测量值参数,标度化值 信息体
 func (sf *ASDU) GetParameterNormal() ParameterNormalInfo {
+	// Decoded in explicit statements rather than inline in the composite
+	// literal: each call advances the infoObj cursor, and Go only orders
+	// function calls within an expression -- an index expression like
+	// sf.infoObj[0] is unordered relative to them, so reading the trailing
+	// qualifier that way could observe the cursor either before or after
+	// the fields ahead of it were consumed.
+	ioa := sf.DecodeInfoObjAddr()
+	value := sf.DecodeNormalize()
 	return ParameterNormalInfo{
-		sf.DecodeInfoObjAddr(),
-		sf.DecodeNormalize(),
-		ParseQualifierOfParamMV(sf.infoObj[0]),
+		Ioa:   ioa,
+		Value: value,
+		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
 	}
 }
 
 // GetParameterScaled [P_ME_NB_1]，获取 测量值参数,归一化值 信息体
 func (sf *ASDU) GetParameterScaled() ParameterScaledInfo {
+	ioa := sf.DecodeInfoObjAddr()
+	value := sf.DecodeScaled()
 	return ParameterScaledInfo{
-		sf.DecodeInfoObjAddr(),
-		sf.DecodeScaled(),
-		ParseQualifierOfParamMV(sf.infoObj[0]),
+		Ioa:   ioa,
+		Value: value,
+		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
 	}
 }
 
 // GetParameterFloat [P_ME_NC_1]，获取 测量值参数,短浮点数 信息体
 func (sf *ASDU) GetParameterFloat() ParameterFloatInfo {
+	ioa := sf.DecodeInfoObjAddr()
+	value := sf.DecodeFloat32()
 	return ParameterFloatInfo{
-		sf.DecodeInfoObjAddr(),
-		sf.DecodeFloat32(),
-		ParseQualifierOfParamMV(sf.infoObj[0]),
+		Ioa:   ioa,
+		Value: value,
+		Qpm:   ParseQualifierOfParamMV(sf.DecodeByte()),
 	}
 }
 
 // GetParameterActivation [P_AC_NA_1]，获取 参数激活 信息体
 func (sf *ASDU) GetParameterActivation() ParameterActivationInfo {
+	ioa := sf.DecodeInfoObjAddr()
 	return ParameterActivationInfo{
-		sf.DecodeInfoObjAddr(),
-		QualifierOfParameterAct(sf.infoObj[0]),
+		Ioa: ioa,
+		Qpa: QualifierOfParameterAct(sf.DecodeByte()),
 	}
 }
