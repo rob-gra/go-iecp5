@@ -39,22 +39,26 @@ type serverSpec struct {
 
 // NewServerSpecial new special server
 func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpecial {
-	return &serverSpec{
+	s := &serverSpec{
 		SrvSession: SrvSession{
-			config:  &o.config,
-			params:  &o.params,
-			handler: handler,
-
-			rcvASDU:   make(chan []byte, 1024),
-			sendQueue: newMessageQueue(1024),
-			rcvRaw:    make(chan []byte, 1024),
-			sendRaw:   make(chan []byte, 1024), // may not block!
-
+			connection: connection{
+				rcvASDU:   make(chan []byte, 1024),
+				sendQueue: newMessageQueue(1024),
+				rcvRaw:    make(chan []byte, 1024),
+				sendRaw:   make(chan []byte, 1024),
+				Clog:      clog.NewLogger("cs104 serverSpec => "),
+			},
+			handler:          handler,
 			commonAddrFilter: o.commonAddrFilter,
-			Clog:             clog.NewLogger("cs104 serverSpec => "),
 		},
 		option: *o,
 	}
+	// Point at this value's own copy of the option, not the caller's, which
+	// it may reuse or mutate after NewServerSpecial returns.
+	s.connection.config = &s.option.config
+	s.connection.params = &s.option.params
+	s.role = &s.SrvSession
+	return s
 }
 
 // SetOnConnectHandler set on connect handler

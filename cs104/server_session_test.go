@@ -53,15 +53,18 @@ func newTestSrvSession(t *testing.T, handler ServerHandlerInterface, cfg Config)
 
 	serverConn, peerConn := net.Pipe()
 	sess := &SrvSession{
-		config:    &cfg,
-		params:    asdu.ParamsWide,
-		handler:   handler,
-		rcvASDU:   make(chan []byte, 1024),
-		sendQueue: newMessageQueue(1024),
-		rcvRaw:    make(chan []byte, 1024),
-		sendRaw:   make(chan []byte, 1024),
-		Clog:      clog.NewLogger("test cs104 => "),
+		connection: connection{
+			config:    &cfg,
+			params:    asdu.ParamsWide,
+			rcvASDU:   make(chan []byte, 1024),
+			sendQueue: newMessageQueue(1024),
+			rcvRaw:    make(chan []byte, 1024),
+			sendRaw:   make(chan []byte, 1024),
+			Clog:      clog.NewLogger("test cs104 => "),
+		},
+		handler: handler,
 	}
+	sess.role = sess
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
@@ -259,11 +262,11 @@ func TestSrvSession_InvalidAck_Disconnects(t *testing.T) {
 // sent immediately before the 15-bit sequence counter wraps from 32767
 // back to 0 must trim it from the pending queue like any other ack.
 func TestSrvSession_updateAckNoOut_Wraparound(t *testing.T) {
-	sess := &SrvSession{
+	sess := &SrvSession{connection: connection{
 		ackNoSend: 32767,
 		seqNoSend: 0,
 		pending:   []seqPending{{seq: 32767, sendTime: time.Now()}},
-	}
+	}}
 
 	if !sess.updateAckNoOut(0) {
 		t.Fatal("updateAckNoOut(0) = false, want true")
@@ -282,12 +285,12 @@ func TestSrvSession_updateAckNoOut_Wraparound(t *testing.T) {
 // (ServerSpecial reuses one SrvSession across reconnects, calling cleanUp
 // at the top of every run()). sendQueue must survive it.
 func TestSrvSession_CleanUp_PreservesSendQueue(t *testing.T) {
-	sess := &SrvSession{
+	sess := &SrvSession{connection: connection{
 		sendQueue: newMessageQueue(10),
 		rcvASDU:   make(chan []byte, 1),
 		rcvRaw:    make(chan []byte, 1),
 		sendRaw:   make(chan []byte, 1),
-	}
+	}}
 	sess.sendQueue.Push([]byte("pending"))
 
 	sess.cleanUp()

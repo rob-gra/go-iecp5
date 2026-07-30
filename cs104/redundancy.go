@@ -132,9 +132,8 @@ func (sf *Server) handleSessionActivated(activated *SrvSession) {
 	}
 
 	sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
-	// Hand off whatever the superseded connection hadn't sent yet to the
-	// connection that's replacing it, since it won't be transmitting
-	// anymore once deactivated.
-	prev.sendQueue.DrainTo(activated.sendQueue)
+	// Nothing to hand over: members of a group share one queue (see
+	// Server.queueFor), so whatever the superseded connection had not yet
+	// sent is already what the connection replacing it will pick up.
 	prev.forceDeactivate()
 }

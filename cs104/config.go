@@ -66,8 +66,9 @@ type Config struct {
 	// See IEC 60870-5-104, subclass 5.5.
 	RecvUnAckLimitW uint16
 
-	// 发送一个接收确认的最大时间，实际上这个框架1秒内发送回复
-	// "t₂" 范围[1, 255]s 默认 10s
+	// 发送一个接收确认的最大时间。达到 "w" 帧会提前确认，
+	// 该超时覆盖对端停止发送、不足 "w" 帧的情况。
+	// "t₂" 范围[1, 255]s 默认 10s，必须小于 "t₁"
 	// See IEC 60870-5-104, figure 10.
 	RecvUnAckTimeout2 time.Duration
 
@@ -125,11 +126,11 @@ func (sf *Config) Valid() error {
 // DefaultConfig default config
 func DefaultConfig() Config {
 	return Config{
-		30 * time.Second,
-		12,
-		15 * time.Second,
-		8,
-		10 * time.Second,
-		20 * time.Second,
+		ConnectTimeout0:   30 * time.Second,
+		SendUnAckLimitK:   12,
+		SendUnAckTimeout1: 15 * time.Second,
+		RecvUnAckLimitW:   8,
+		RecvUnAckTimeout2: 10 * time.Second,
+		IdleTimeout3:      20 * time.Second,
 	}
 }

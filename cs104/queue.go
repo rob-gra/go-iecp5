@@ -95,17 +95,3 @@ func (q *messageQueue) Len() int {
 	defer q.mu.Unlock()
 	return len(q.items)
 }
-
-// DrainTo pops every entry off q, in order, and pushes it onto dst. Used to
-// hand off a superseded session's undelivered queue to the session that
-// replaced it, so activating a new connection in a redundancy group doesn't
-// lose whatever the old one hadn't sent yet.
-func (q *messageQueue) DrainTo(dst *messageQueue) {
-	for {
-		data, ok := q.Pop()
-		if !ok {
-			return
-		}
-		dst.Push(data)
-	}
-}

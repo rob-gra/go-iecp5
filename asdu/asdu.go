@@ -159,10 +159,13 @@ func (sf *ASDU) SetVariableNumber(n int) error {
 //	})
 //}
 
-// Reply returns a new "responding" ASDU which addresses "initiating" addr with a copy of Info.
+// Reply returns a new "responding" ASDU addressed to addr, carrying cause c
+// and a copy of this ASDU's information object. The receiver is not
+// modified.
 func (sf *ASDU) Reply(c Cause, addr CommonAddr) *ASDU {
-	sf.CommonAddr = addr
-	r := NewASDU(sf.Params, sf.Identifier)
+	id := sf.Identifier
+	id.CommonAddr = addr
+	r := NewASDU(sf.Params, id)
 	r.Coa.Cause = c
 	r.infoObj = append(r.infoObj, sf.infoObj...)
 	return r
