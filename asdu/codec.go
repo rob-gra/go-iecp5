@@ -16,8 +16,21 @@ func (sf *ASDU) AppendBytes(b ...byte) *ASDU {
 	return sf
 }
 
+// ensureLen panics with ErrInfoObjTruncated if fewer than n bytes remain in
+// sf.infoObj. Every Decode* method calls this before slicing/indexing, so a
+// truncated or malformed information object fails predictably here instead
+// of either a raw runtime "index out of range" panic, or -- for a reslice
+// that happens to still fit within infoObj's backing array capacity --
+// silently succeeding with stale bytes from beyond the actual payload.
+func (sf *ASDU) ensureLen(n int) {
+	if len(sf.infoObj) < n {
+		panic(ErrInfoObjTruncated)
+	}
+}
+
 // DecodeByte decode a byte then the pass it
 func (sf *ASDU) DecodeByte() byte {
+	sf.ensureLen(1)
 	v := sf.infoObj[0]
 	sf.infoObj = sf.infoObj[1:]
 	return v
@@ -31,6 +44,7 @@ func (sf *ASDU) AppendUint16(b uint16) *ASDU {
 
 // DecodeUint16 decode a uint16 then the pass it
 func (sf *ASDU) DecodeUint16() uint16 {
+	sf.ensureLen(2)
 	v := binary.LittleEndian.Uint16(sf.infoObj)
 	sf.infoObj = sf.infoObj[2:]
 	return v
@@ -65,12 +79,15 @@ func (sf *ASDU) DecodeInfoObjAddr() InfoObjAddr {
 	var ioa InfoObjAddr
 	switch sf.InfoObjAddrSize {
 	case 1:
+		sf.ensureLen(1)
 		ioa = InfoObjAddr(sf.infoObj[0])
 		sf.infoObj = sf.infoObj[1:]
 	case 2:
+		sf.ensureLen(2)
 		ioa = InfoObjAddr(sf.infoObj[0]) | (InfoObjAddr(sf.infoObj[1]) << 8)
 		sf.infoObj = sf.infoObj[2:]
 	case 3:
+		sf.ensureLen(3)
 		ioa = InfoObjAddr(sf.infoObj[0]) | (InfoObjAddr(sf.infoObj[1]) << 8) | (InfoObjAddr(sf.infoObj[2]) << 16)
 		sf.infoObj = sf.infoObj[3:]
 	default:
@@ -87,6 +104,7 @@ func (sf *ASDU) AppendNormalize(n Normalize) *ASDU {
 
 // DecodeNormalize decode info object byte to a Normalize value
 func (sf *ASDU) DecodeNormalize() Normalize {
+	sf.ensureLen(2)
 	n := Normalize(binary.LittleEndian.Uint16(sf.infoObj))
 	sf.infoObj = sf.infoObj[2:]
 	return n
@@ -101,6 +119,7 @@ func (sf *ASDU) AppendScaled(i int16) *ASDU {
 
 // DecodeScaled decode info object byte to a Scaled value
 func (sf *ASDU) DecodeScaled() int16 {
+	sf.ensureLen(2)
 	s := int16(binary.LittleEndian.Uint16(sf.infoObj))
 	sf.infoObj = sf.infoObj[2:]
 	return s
@@ -116,6 +135,7 @@ func (sf *ASDU) AppendFloat32(f float32) *ASDU {
 
 // DecodeFloat32 decode info object byte to a float32 value
 func (sf *ASDU) DecodeFloat32() float32 {
+	sf.ensureLen(4)
 	f := math.Float32frombits(binary.LittleEndian.Uint32(sf.infoObj))
 	sf.infoObj = sf.infoObj[4:]
 	return f
@@ -141,6 +161,7 @@ func (sf *ASDU) AppendBinaryCounterReading(v BinaryCounterReading) *ASDU {
 
 // DecodeBinaryCounterReading decode info object byte to binary couter reading value
 func (sf *ASDU) DecodeBinaryCounterReading() BinaryCounterReading {
+	sf.ensureLen(5)
 	v := int32(binary.LittleEndian.Uint32(sf.infoObj))
 	b := sf.infoObj[4]
 	sf.infoObj = sf.infoObj[5:]
@@ -162,6 +183,7 @@ func (sf *ASDU) AppendBitsString32(v uint32) *ASDU {
 
 // DecodeBitsString32 decode info object byte to a bits string value
 func (sf *ASDU) DecodeBitsString32() uint32 {
+	sf.ensureLen(4)
 	v := binary.LittleEndian.Uint32(sf.infoObj)
 	sf.infoObj = sf.infoObj[4:]
 	return v
@@ -175,6 +197,7 @@ func (sf *ASDU) AppendCP56Time2a(t time.Time, loc *time.Location) *ASDU {
 
 // DecodeCP56Time2a decode info object byte to CP56Time2a
 func (sf *ASDU) DecodeCP56Time2a() time.Time {
+	sf.ensureLen(7)
 	t := ParseCP56Time2a(sf.infoObj, sf.InfoObjTimeZone)
 	sf.infoObj = sf.infoObj[7:]
 	return t
@@ -188,6 +211,7 @@ func (sf *ASDU) AppendCP24Time2a(t time.Time, loc *time.Location) *ASDU {
 
 // DecodeCP24Time2a decode info object byte to CP24Time2a
 func (sf *ASDU) DecodeCP24Time2a() time.Time {
+	sf.ensureLen(3)
 	t := ParseCP24Time2a(sf.infoObj, sf.Params.InfoObjTimeZone)
 	sf.infoObj = sf.infoObj[3:]
 	return t
@@ -201,6 +225,7 @@ func (sf *ASDU) AppendCP16Time2a(msec uint16) *ASDU {
 
 // DecodeCP16Time2a decode info object byte to CP16Time2a
 func (sf *ASDU) DecodeCP16Time2a() uint16 {
+	sf.ensureLen(2)
 	t := ParseCP16Time2a(sf.infoObj)
 	sf.infoObj = sf.infoObj[2:]
 	return t
@@ -214,6 +239,7 @@ func (sf *ASDU) AppendStatusAndStatusChangeDetection(scd StatusAndStatusChangeDe
 
 // DecodeStatusAndStatusChangeDetection decode info object byte to StatusAndStatusChangeDetection
 func (sf *ASDU) DecodeStatusAndStatusChangeDetection() StatusAndStatusChangeDetection {
+	sf.ensureLen(4)
 	s := StatusAndStatusChangeDetection(binary.LittleEndian.Uint32(sf.infoObj))
 	sf.infoObj = sf.infoObj[4:]
 	return s
