@@ -78,7 +78,7 @@ func newTestSrvSession(t *testing.T, handler ServerHandlerInterface, cfg Config)
 }
 
 // readFrame reads one raw APDU off conn and parses it.
-func readFrame(t *testing.T, conn net.Conn) (interface{}, []byte) {
+func readFrame(t *testing.T, conn net.Conn) (any, []byte) {
 	t.Helper()
 
 	head := make([]byte, 2)

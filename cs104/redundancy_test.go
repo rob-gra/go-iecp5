@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +36,7 @@ func (c *stubConn) SetWriteDeadline(time.Time) error { return nil }
 // newGroupTestSession builds a bare SrvSession for driving
 // handleSessionActivated directly, without real run() goroutines, so
 // outcomes don't depend on racing a send loop.
-func newGroupTestSession(srv *Server, groupKey interface{}) *SrvSession {
+func newGroupTestSession(srv *Server, groupKey any) *SrvSession {
 	sess := &SrvSession{
 		connection: connection{
 			sendQueue:    srv.queueFor(groupKey),
@@ -196,10 +195,10 @@ func TestServer_RedundancyGroup_SharesOneSendQueue(t *testing.T) {
 	groupKey := singleRedundancyGroupKey{}
 
 	sessA := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&sessA.isActive, active)
+	sessA.isActive.Store(true)
 
 	sessB := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&sessB.isActive, active)
+	sessB.isActive.Store(true)
 
 	if sessA.sendQueue != sessB.sendQueue {
 		t.Fatal("connections in one redundancy group must share a single send queue")
@@ -242,10 +241,10 @@ func TestServer_Send_DoesNotQueueOntoStandbys(t *testing.T) {
 
 	activeSess := newGroupTestSession(srv, groupKey)
 	standby := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&activeSess.isActive, active)
-	atomic.StoreUint32(&standby.isActive, inactive)
-	atomic.StoreUint32(&activeSess.status, connected)
-	atomic.StoreUint32(&standby.status, connected)
+	activeSess.isActive.Store(true)
+	standby.isActive.Store(false)
+	activeSess.status.Store(connected)
+	standby.status.Store(connected)
 
 	srv.mux.Lock()
 	srv.sessions[activeSess] = struct{}{}
@@ -293,8 +292,8 @@ func TestServer_HandleSessionActivated_ConcurrentActivation_ExactlyOneSuperseded
 		// Simulate both sessions' run() goroutines completing their atomic
 		// isActive swap (as happens on receiving STARTDT_ACT) before either
 		// one's onActivate/handleSessionActivated call runs.
-		atomic.StoreUint32(&sessA.isActive, active)
-		atomic.StoreUint32(&sessB.isActive, active)
+		sessA.isActive.Store(true)
+		sessB.isActive.Store(true)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -320,7 +319,7 @@ func TestServer_ReleaseSession_ClearsActiveGroupEntry(t *testing.T) {
 	groupKey := singleRedundancyGroupKey{}
 
 	sess := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&sess.isActive, active)
+	sess.isActive.Store(true)
 
 	srv.mux.Lock()
 	srv.sessions[sess] = struct{}{}
@@ -360,17 +359,17 @@ func TestServer_HandleSessionActivated_SkipsAlreadyInactive(t *testing.T) {
 	groupKey := singleRedundancyGroupKey{}
 
 	sessA := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&sessA.isActive, active)
+	sessA.isActive.Store(true)
 	srv.mux.Lock()
 	srv.sessions[sessA] = struct{}{}
 	srv.mux.Unlock()
 	srv.handleSessionActivated(sessA)
 
 	// A's peer sends STOPDT, so A deactivates itself.
-	atomic.StoreUint32(&sessA.isActive, inactive)
+	sessA.isActive.Store(false)
 
 	sessB := newGroupTestSession(srv, groupKey)
-	atomic.StoreUint32(&sessB.isActive, active)
+	sessB.isActive.Store(true)
 	srv.mux.Lock()
 	srv.sessions[sessB] = struct{}{}
 	srv.mux.Unlock()

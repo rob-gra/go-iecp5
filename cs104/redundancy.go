@@ -62,15 +62,15 @@ func (rg *RedundancyGroup) matches(ip string) bool {
 
 // singleRedundancyGroupKey is the shared redundancy-group key given to every
 // connection under ModeSingleRedundancyGroup: being a zero-size struct type,
-// all its values compare equal, so it works directly as a comparable
-// interface{} map/group key without needing a sentinel value.
+// all its values compare equal, so it works directly as a comparable map
+// key without needing a sentinel value.
 type singleRedundancyGroupKey struct{}
 
 // groupKeyFor returns the redundancy-group key a newly accepted connection
 // belongs to, or nil if it isn't grouped with any other connection. Sessions
 // sharing a non-nil, equal key are each other's failover peers: see
 // Server.handleSessionActivated.
-func (sf *Server) groupKeyFor(conn net.Conn) interface{} {
+func (sf *Server) groupKeyFor(conn net.Conn) any {
 	switch sf.serverMode {
 	case ModeSingleRedundancyGroup:
 		return singleRedundancyGroupKey{}

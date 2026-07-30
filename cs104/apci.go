@@ -122,7 +122,7 @@ type APCI struct {
 // validated the frame length, e.g. via ReadAPDU or recvLoop's own framing.
 // See ParseAPCI for a bounds-checked, exported equivalent suitable for
 // arbitrary/untrusted input.
-func parse(apdu []byte) (interface{}, []byte) {
+func parse(apdu []byte) (any, []byte) {
 	apci := APCI{apdu[0], apdu[1], apdu[2], apdu[3], apdu[4], apdu[5]}
 	if apci.ctr1&0x01 == 0 {
 		return iAPCI{
@@ -152,7 +152,7 @@ func parse(apdu []byte) (interface{}, []byte) {
 // Unlike the package's internal frame handling, ParseAPCI is exported and
 // bounds-checked so it can be used to decode APDUs from sources other than
 // a live connection, e.g. frames extracted from a pcap capture.
-func ParseAPCI(apdu []byte) (apci interface{}, asduPayload []byte, err error) {
+func ParseAPCI(apdu []byte) (apci any, asduPayload []byte, err error) {
 	if len(apdu) < APCICtlFiledSize+2 {
 		return nil, nil, io.ErrUnexpectedEOF
 	}

@@ -74,8 +74,12 @@ type connection struct {
 	ackNoRcv  uint16 // inbound sequence number yet to be confirmed
 	pending   []seqPending
 
-	status   uint32 // atomic
-	isActive uint32 // atomic: active/inactive
+	// status and isActive are typed atomics: the type carries the
+	// synchronisation requirement, so a plain read cannot be written by
+	// accident the way it could when these were bare uint32s with a
+	// comment asking for atomic access.
+	status   atomic.Uint32
+	isActive atomic.Bool
 	// connMu guards the state that is rebound when a connection is
 	// (re)established: conn here, and closeCancel on the types that
 	// reconnect. status and isActive are atomics and need no lock.
@@ -109,7 +113,7 @@ func (sf *connection) IsConnected() bool { return sf.connectStatus() == connecte
 
 // IsActive reports whether the STARTDT handshake has completed and no
 // STOPDT has been sent or received since.
-func (sf *connection) IsActive() bool { return atomic.LoadUint32(&sf.isActive) == active }
+func (sf *connection) IsActive() bool { return sf.isActive.Load() }
 
 // Params returns the ASDU parameters this connection encodes and decodes with.
 func (sf *connection) Params() *asdu.Params { return sf.params }
@@ -130,11 +134,11 @@ func (sf *connection) forceDeactivate() {
 }
 
 func (sf *connection) setConnectStatus(status uint32) {
-	atomic.StoreUint32(&sf.status, status)
+	sf.status.Store(status)
 }
 
 func (sf *connection) connectStatus() uint32 {
-	return atomic.LoadUint32(&sf.status)
+	return sf.status.Load()
 }
 
 // setConn stores conn for UnderlyingConn to read. Client and ServerSpecial
@@ -374,7 +378,7 @@ func (sf *connection) cleanUp() {
 	sf.seqNoSend = 0
 	sf.pending = nil
 	sf.testFrAliveSendSince = time.Time{}
-	atomic.StoreUint32(&sf.isActive, inactive)
+	sf.isActive.Store(false)
 	// Client and ServerSpecial reuse one value across reconnects, so re-arm
 	// the deactivate signal for the new connection's lifetime.
 	sf.deactivateCh = make(chan struct{}, 1)
@@ -389,7 +393,7 @@ func (sf *connection) cleanUp() {
 
 // drain empties ch without blocking. Safe here because run's goroutines
 // have all finished by the time cleanUp runs, so nothing is refilling it.
-func drain(ch chan []byte) {
+func drain[T any](ch chan T) {
 	for {
 		select {
 		case <-ch:
@@ -416,7 +420,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 
 	checkTicker := time.NewTicker(timeoutResolution)
 	defer func() {
-		atomic.StoreUint32(&sf.isActive, inactive)
+		sf.isActive.Store(false)
 		sf.setConnectStatus(disconnected)
 		checkTicker.Stop()
 		// Cancel before waiting. Closing the connection is not enough on
@@ -456,7 +460,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// the peer having to reconnect.
 			sf.Debug("deactivating: superseded by another connection in the redundancy group")
 			sf.sendUFrame(uStopDtConfirm)
-			atomic.StoreUint32(&sf.isActive, inactive)
+			sf.isActive.Store(false)
 
 		case <-sf.sendQueue.Ready():
 			continue

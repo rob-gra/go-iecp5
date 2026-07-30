@@ -40,14 +40,14 @@ type Server struct {
 	// currently recorded as that group's active connection. See
 	// handleSessionActivated for why this is authoritative state rather than
 	// something re-derived from each session's IsActive() flag.
-	activeByGroup map[interface{}]*SrvSession
+	activeByGroup map[any]*SrvSession
 	// groupQueues holds the outbound queue shared by all connections in a
 	// redundancy group. The data belongs to the group, not to whichever
 	// connection happens to be carrying it, so members share one queue and
 	// only the active one drains it -- a standby that takes over simply
 	// continues where its predecessor left off. Ungrouped connections are
 	// absent here and own a private queue instead.
-	groupQueues      map[interface{}]*messageQueue
+	groupQueues      map[any]*messageQueue
 	commonAddrFilter func(asdu.CommonAddr) bool
 	// maxConnections caps concurrent sessions; zero means unlimited. See
 	// SetMaxConnections.
@@ -67,8 +67,8 @@ func NewServer(handler ServerHandlerInterface) *Server {
 		params:        *asdu.ParamsWide,
 		handler:       handler,
 		sessions:      make(map[*SrvSession]struct{}),
-		activeByGroup: make(map[interface{}]*SrvSession),
-		groupQueues:   make(map[interface{}]*messageQueue),
+		activeByGroup: make(map[any]*SrvSession),
+		groupQueues:   make(map[any]*messageQueue),
 		Clog:          clog.NewLogger("cs104 server => "),
 	}
 }
@@ -321,7 +321,7 @@ func (sf *Server) Close() error {
 // that group accumulates, so a group whose members are all momentarily
 // disconnected still buffers (bounded, oldest-evicted) until one of them
 // reconnects, rather than dropping everything on the floor.
-func (sf *Server) queueFor(key interface{}) *messageQueue {
+func (sf *Server) queueFor(key any) *messageQueue {
 	size := int(sf.config.SendUnAckLimitK) << 4
 	if key == nil {
 		return newMessageQueue(size)

@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"math/rand"
-	"sync/atomic"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -86,7 +85,7 @@ func (sf *serverSpec) running() {
 	var ctx context.Context
 
 	sf.connMu.Lock()
-	if !atomic.CompareAndSwapUint32(&sf.status, initial, disconnected) {
+	if !sf.status.CompareAndSwap(initial, disconnected) {
 		sf.connMu.Unlock()
 		return
 	}
