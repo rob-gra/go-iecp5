@@ -4,13 +4,14 @@
 
 package asdu
 
-// 在监视方向系统信息的应用服务数据单元
+// ASDUs for system information in the monitor direction.
 
-// EndOfInitialization send a type identification [M_EI_NA_1],初始化结束,只有单个信息对象(SQ = 0)
+// EndOfInitialization sends a type identification [M_EI_NA_1]: end of
+// initialization. Only a single information object (SQ = 0).
 // [M_EI_NA_1] See companion standard 101,subclass 7.3.3.1
-// 传送原因(coa)用于
-// 监视方向：
-// <4> := 被初始化
+// Cause of transmission (COT) is used for:
+// monitor direction:
+// <4> := initialized
 func EndOfInitialization(c Connect, coa CauseOfTransmission, ca CommonAddr, ioa InfoObjAddr, coi CauseOfInitial) error {
 	if err := c.Params().Valid(); err != nil {
 		return err

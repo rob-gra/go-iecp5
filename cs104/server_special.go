@@ -109,7 +109,7 @@ func (sf *serverSpec) Start() error {
 	return nil
 }
 
-// 增加重连间隔
+// running dials the remote server, runs the connection, and reconnects.
 func (sf *serverSpec) running(ctx context.Context) {
 	defer sf.setConnectStatus(initial)
 
@@ -137,7 +137,8 @@ func (sf *serverSpec) running(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			// 随机500ms-1s的重试，避免快速重试造成服务器许多无效连接
+			// Wait a random 500ms-1s before retrying, so a fast reconnect loop
+			// does not leave the server with a pile of dead connections.
 			time.Sleep(time.Millisecond * time.Duration(500+rand.Intn(500)))
 		}
 	}

@@ -26,7 +26,7 @@ type seqPending struct {
 // number space, see IEC 60870-5-104, subclass 5.5.
 const seqNoModulus = 1 << 15
 
-// 回绕机制, returns the count of sequence numbers between nextAckNo(inclusive)
+// seqNoCount returns the count of sequence numbers between nextAckNo (inclusive)
 // and nextSeqNo(exclusive), accounting for wraparound of the 15-bit sequence
 // number space.
 func seqNoCount(nextAckNo, nextSeqNo uint16) uint16 {
@@ -57,7 +57,8 @@ func confirmSeqNo(pending []seqPending, ackNoSend, seqNoSend, ackNo uint16) (_ [
 	if ackNo == ackNoSend {
 		return pending, true
 	}
-	// new acks validate, ack 不能在 req seq 前面,出错
+	// Validate the new ack: it may not fall ahead of the sequence number
+	// actually sent, which would be an error.
 	if seqNoCount(ackNoSend, seqNoSend) < seqNoCount(ackNo, seqNoSend) {
 		return pending, false
 	}

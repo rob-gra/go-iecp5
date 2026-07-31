@@ -15,14 +15,14 @@ import (
 	"github.com/thinkgos/go-iecp5/asdu"
 )
 
-// ClientOption 客户端配置
+// ClientOption is the configuration for a dial-out station.
 type ClientOption struct {
 	config            Config
 	params            asdu.Params
-	server            *url.URL      // 连接的服务器端
-	autoReconnect     bool          // 是否启动重连
-	reconnectInterval time.Duration // 重连间隔时间
-	TLSConfig         *tls.Config   // tls配置
+	server            *url.URL      // remote server to connect to
+	autoReconnect     bool          // whether to reconnect after a lost connection
+	reconnectInterval time.Duration // wait between reconnect attempts
+	TLSConfig         *tls.Config   // TLS configuration
 	commonAddrFilter  func(asdu.CommonAddr) bool
 	// rejected records settings SetConfig/SetParams refused and replaced
 	// with defaults. A ClientOption has no logger of its own, so the

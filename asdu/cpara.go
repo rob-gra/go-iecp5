@@ -4,31 +4,33 @@
 
 package asdu
 
-// 在控制方向参数的应用服务数据单元
+// ASDUs for parameters in the control direction.
 
-// ParameterNormalInfo 测量值参数,归一化值 信息体
+// ParameterNormalInfo is a parameter of measured value information object,
+// normalized value.
 type ParameterNormalInfo struct {
 	Ioa   InfoObjAddr
 	Value Normalize
 	Qpm   QualifierOfParameterMV
 }
 
-// ParameterNormal 测量值参数,规一化值, 只有单个信息对象(SQ = 0)
+// ParameterNormal sends a parameter of measured value, normalized value
+// [P_ME_NA_1]. Only a single information object (SQ = 0).
 // [P_ME_NA_1], See companion standard 101, subclass 7.3.5.1
-// 传送原因(coa)用于
-// 控制方向：
-// <6> := 激活
-// 监视方向：
-// <7> := 激活确认
-// <20> := 响应站召唤
-// <21> := 响应第 1 组召唤
-// <22> := 响应第 2 组召唤
-// 至
-// <36> := 响应第 16 组召唤
-// <44> := 未知的类型标识
-// <45> := 未知的传送原因
-// <46> := 未知的应用服务数据单元公共地址
-// <47> := 未知的信息对象地址
+// Cause of transmission (COT) is used for:
+// control direction:
+// <6> := activation
+// monitor direction:
+// <7> := activation confirmation
+// <20> := interrogated by station interrogation
+// <21> := interrogated by group 1 interrogation
+// <22> := interrogated by group 2 interrogation
+// through
+// <36> := interrogated by group 16 interrogation
+// <44> := unknown type identification
+// <45> := unknown cause of transmission
+// <46> := unknown common address of ASDU
+// <47> := unknown information object address
 func ParameterNormal(c Connect, coa CauseOfTransmission, ca CommonAddr, p ParameterNormalInfo) error {
 	if coa.Cause != Activation {
 		return ErrCmdCause
@@ -52,29 +54,31 @@ func ParameterNormal(c Connect, coa CauseOfTransmission, ca CommonAddr, p Parame
 	return c.Send(u)
 }
 
-// ParameterScaledInfo 测量值参数,标度化值 信息体
+// ParameterScaledInfo is a parameter of measured value information object,
+// scaled value.
 type ParameterScaledInfo struct {
 	Ioa   InfoObjAddr
 	Value int16
 	Qpm   QualifierOfParameterMV
 }
 
-// ParameterScaled 测量值参数,标度化值, 只有单个信息对象(SQ = 0)
+// ParameterScaled sends a parameter of measured value, scaled value
+// [P_ME_NB_1]. Only a single information object (SQ = 0).
 // [P_ME_NB_1], See companion standard 101, subclass 7.3.5.2
-// 传送原因(coa)用于
-// 控制方向：
-// <6> := 激活
-// 监视方向：
-// <7> := 激活确认
-// <20> := 响应站召唤
-// <21> := 响应第 1 组召唤
-// <22> := 响应第 2 组召唤
-// 至
-// <36> := 响应第 16 组召唤
-// <44> := 未知的类型标识
-// <45> := 未知的传送原因
-// <46> := 未知的应用服务数据单元公共地址
-// <47> := 未知的信息对象地址
+// Cause of transmission (COT) is used for:
+// control direction:
+// <6> := activation
+// monitor direction:
+// <7> := activation confirmation
+// <20> := interrogated by station interrogation
+// <21> := interrogated by group 1 interrogation
+// <22> := interrogated by group 2 interrogation
+// through
+// <36> := interrogated by group 16 interrogation
+// <44> := unknown type identification
+// <45> := unknown cause of transmission
+// <46> := unknown common address of ASDU
+// <47> := unknown information object address
 func ParameterScaled(c Connect, coa CauseOfTransmission, ca CommonAddr, p ParameterScaledInfo) error {
 	if coa.Cause != Activation {
 		return ErrCmdCause
@@ -97,29 +101,31 @@ func ParameterScaled(c Connect, coa CauseOfTransmission, ca CommonAddr, p Parame
 	return c.Send(u)
 }
 
-// ParameterFloatInfo 测量参数,短浮点数 信息体
+// ParameterFloatInfo is a parameter of measured value information object,
+// short floating point number.
 type ParameterFloatInfo struct {
 	Ioa   InfoObjAddr
 	Value float32
 	Qpm   QualifierOfParameterMV
 }
 
-// ParameterFloat 测量值参数,短浮点数, 只有单个信息对象(SQ = 0)
+// ParameterFloat sends a parameter of measured value, short floating point
+// number [P_ME_NC_1]. Only a single information object (SQ = 0).
 // [P_ME_NC_1], See companion standard 101, subclass 7.3.5.3
-// 传送原因(coa)用于
-// 控制方向：
-// <6> := 激活
-// 监视方向：
-// <7> := 激活确认
-// <20> := 响应站召唤
-// <21> := 响应第 1 组召唤
-// <22> := 响应第 2 组召唤
-// 至
-// <36> := 响应第 16 组召唤
-// <44> := 未知的类型标识
-// <45> := 未知的传送原因
-// <46> := 未知的应用服务数据单元公共地址
-// <47> := 未知的信息对象地址
+// Cause of transmission (COT) is used for:
+// control direction:
+// <6> := activation
+// monitor direction:
+// <7> := activation confirmation
+// <20> := interrogated by station interrogation
+// <21> := interrogated by group 1 interrogation
+// <22> := interrogated by group 2 interrogation
+// through
+// <36> := interrogated by group 16 interrogation
+// <44> := unknown type identification
+// <45> := unknown cause of transmission
+// <46> := unknown common address of ASDU
+// <47> := unknown information object address
 func ParameterFloat(c Connect, coa CauseOfTransmission, ca CommonAddr, p ParameterFloatInfo) error {
 	if coa.Cause != Activation {
 		return ErrCmdCause
@@ -142,25 +148,26 @@ func ParameterFloat(c Connect, coa CauseOfTransmission, ca CommonAddr, p Paramet
 	return c.Send(u)
 }
 
-// ParameterActivationInfo 参数激活 信息体
+// ParameterActivationInfo is a parameter activation information object.
 type ParameterActivationInfo struct {
 	Ioa InfoObjAddr
 	Qpa QualifierOfParameterAct
 }
 
-// ParameterActivation 参数激活, 只有单个信息对象(SQ = 0)
+// ParameterActivation sends a parameter activation [P_AC_NA_1]. Only a
+// single information object (SQ = 0).
 // [P_AC_NA_1], See companion standard 101, subclass 7.3.5.4
-// 传送原因(coa)用于
-// 控制方向：
-// <6> := 激活
-// <8> := 停止激活
-// 监视方向：
-// <7> := 激活确认
-// <9> := 停止激活确认
-// <44> := 未知的类型标识
-// <45> := 未知的传送原因
-// <46> := 未知的应用服务数据单元公共地址
-// <47> := 未知的信息对象地址
+// Cause of transmission (COT) is used for:
+// control direction:
+// <6> := activation
+// <8> := deactivation
+// monitor direction:
+// <7> := activation confirmation
+// <9> := deactivation confirmation
+// <44> := unknown type identification
+// <45> := unknown cause of transmission
+// <46> := unknown common address of ASDU
+// <47> := unknown information object address
 func ParameterActivation(c Connect, coa CauseOfTransmission, ca CommonAddr, p ParameterActivationInfo) error {
 	if !(coa.Cause == Activation || coa.Cause == Deactivation) {
 		return ErrCmdCause
@@ -183,7 +190,8 @@ func ParameterActivation(c Connect, coa CauseOfTransmission, ca CommonAddr, p Pa
 	return c.Send(u)
 }
 
-// GetParameterNormal [P_ME_NA_1]，获取 测量值参数,标度化值 信息体
+// GetParameterNormal returns the parameter of measured value information
+// object, normalized value, of a [P_ME_NA_1].
 func (sf *ASDU) GetParameterNormal() (ParameterNormalInfo, error) {
 	d := sf.decoder()
 	// Decoded in explicit statements rather than inline in the composite
@@ -201,7 +209,8 @@ func (sf *ASDU) GetParameterNormal() (ParameterNormalInfo, error) {
 	}, d.err
 }
 
-// GetParameterScaled [P_ME_NB_1]，获取 测量值参数,归一化值 信息体
+// GetParameterScaled returns the parameter of measured value information
+// object, scaled value, of a [P_ME_NB_1].
 func (sf *ASDU) GetParameterScaled() (ParameterScaledInfo, error) {
 	d := sf.decoder()
 	ioa := d.readInfoObjAddr()
@@ -213,7 +222,8 @@ func (sf *ASDU) GetParameterScaled() (ParameterScaledInfo, error) {
 	}, d.err
 }
 
-// GetParameterFloat [P_ME_NC_1]，获取 测量值参数,短浮点数 信息体
+// GetParameterFloat returns the parameter of measured value information
+// object, short floating point number, of a [P_ME_NC_1].
 func (sf *ASDU) GetParameterFloat() (ParameterFloatInfo, error) {
 	d := sf.decoder()
 	ioa := d.readInfoObjAddr()
@@ -225,7 +235,8 @@ func (sf *ASDU) GetParameterFloat() (ParameterFloatInfo, error) {
 	}, d.err
 }
 
-// GetParameterActivation [P_AC_NA_1]，获取 参数激活 信息体
+// GetParameterActivation returns the parameter activation information object
+// of a [P_AC_NA_1].
 func (sf *ASDU) GetParameterActivation() (ParameterActivationInfo, error) {
 	d := sf.decoder()
 	ioa := d.readInfoObjAddr()

@@ -19,27 +19,27 @@ const (
 
 // defines an IEC 60870-5-104 configuration range
 const (
-	// "t₀" 范围[1, 255]s 默认 30s
+	// "t₀" range [1, 255]s, default 30s.
 	ConnectTimeout0Min = 1 * time.Second
 	ConnectTimeout0Max = 255 * time.Second
 
-	// "t₁" 范围[1, 255]s 默认 15s. See IEC 60870-5-104, figure 18.
+	// "t₁" range [1, 255]s, default 15s. See IEC 60870-5-104, figure 18.
 	SendUnAckTimeout1Min = 1 * time.Second
 	SendUnAckTimeout1Max = 255 * time.Second
 
-	// "t₂" 范围[1, 255]s 默认 10s, See IEC 60870-5-104, figure 10.
+	// "t₂" range [1, 255]s, default 10s. See IEC 60870-5-104, figure 10.
 	RecvUnAckTimeout2Min = 1 * time.Second
 	RecvUnAckTimeout2Max = 255 * time.Second
 
-	// "t₃" 范围[1 second, 48 hours] 默认 20 s, See IEC 60870-5-104, subclass 5.2.
+	// "t₃" range [1 second, 48 hours], default 20s. See IEC 60870-5-104, subclass 5.2.
 	IdleTimeout3Min = 1 * time.Second
 	IdleTimeout3Max = 48 * time.Hour
 
-	// "k" 范围[1, 32767] 默认 12. See IEC 60870-5-104, subclass 5.5.
+	// "k" range [1, 32767], default 12. See IEC 60870-5-104, subclass 5.5.
 	SendUnAckLimitKMin = 1
 	SendUnAckLimitKMax = 32767
 
-	// "w" 范围 [1， 32767] 默认 8. See IEC 60870-5-104, subclass 5.5.
+	// "w" range [1, 32767], default 8. See IEC 60870-5-104, subclass 5.5.
 	RecvUnAckLimitWMin = 1
 	RecvUnAckLimitWMax = 32767
 )
@@ -47,33 +47,37 @@ const (
 // Config defines an IEC 60870-5-104 configuration.
 // The default is applied for each unspecified value.
 type Config struct {
-	// tcp连接建立的最大超时时间
-	// "t₀" 范围[1, 255]s，默认 30s.
+	// Maximum time allowed to establish the TCP connection.
+	// "t₀" range [1, 255]s, default 30s.
 	ConnectTimeout0 time.Duration
 
-	// I-frames 发送未收到确认的帧数上限， 一旦达到这个数，将停止传输
-	// "k" 范围[1, 32767] 默认 12.
+	// Maximum number of I-frames sent without acknowledgement. On reaching
+	// it, transmission stops until the peer acknowledges.
+	// "k" range [1, 32767], default 12.
 	// See IEC 60870-5-104, subclass 5.5.
 	SendUnAckLimitK uint16
 
-	// 帧接收确认最长超时时间，超过此时间立即关闭连接。
-	// "t₁" 范围[1, 255]s 默认 15s.
+	// Longest a sent frame may go unacknowledged. On expiry the connection
+	// is closed immediately.
+	// "t₁" range [1, 255]s, default 15s.
 	// See IEC 60870-5-104, figure 18.
 	SendUnAckTimeout1 time.Duration
 
-	// 接收端最迟在接收了w次I-frames应用规约数据单元以后发出认可。 w不超过2/3k(2/3 SendUnAckLimitK)
-	// "w" 范围 [1， 32767] 默认 8.
+	// The receiver must acknowledge at the latest after receiving w I-frame
+	// APDUs. w must not exceed 2/3 k (2/3 of SendUnAckLimitK).
+	// "w" range [1, 32767], default 8.
 	// See IEC 60870-5-104, subclass 5.5.
 	RecvUnAckLimitW uint16
 
-	// 发送一个接收确认的最大时间。达到 "w" 帧会提前确认，
-	// 该超时覆盖对端停止发送、不足 "w" 帧的情况。
-	// "t₂" 范围[1, 255]s 默认 10s，必须小于 "t₁"
+	// Longest an acknowledgement may be deferred. Reaching "w" frames
+	// acknowledges sooner; this timeout covers the case where the peer stops
+	// sending before "w" frames have accumulated.
+	// "t₂" range [1, 255]s, default 10s. Must be less than "t₁".
 	// See IEC 60870-5-104, figure 10.
 	RecvUnAckTimeout2 time.Duration
 
-	// 触发 "TESTFR" 保活的空闲时间值，
-	// "t₃" 范围[1 second, 48 hours] 默认 20 s
+	// Idle time that triggers a "TESTFR" keep-alive.
+	// "t₃" range [1 second, 48 hours], default 20s.
 	// See IEC 60870-5-104, subclass 5.2.
 	IdleTimeout3 time.Duration
 }

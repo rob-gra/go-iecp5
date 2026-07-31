@@ -34,22 +34,23 @@ var (
 	ParamsWide = &Params{CauseSize: 2, CommonAddrSize: 2, InfoObjAddrSize: 3, InfoObjTimeZone: time.UTC}
 )
 
-// Params 定义了ASDU相关特定参数
+// Params defines the ASDU-specific parameters.
 // See companion standard 101, subclass 7.1.
 type Params struct {
-	// cause of transmission, 传输原因字节数
+	// cause of transmission, number of octets
 	// The standard requires "b" in [1, 2].
 	// Value 2 includes/activates the originator address.
 	CauseSize int
 	// Originator Address [1, 255] or 0 for the default.
 	// The applicability is controlled by Params.CauseSize.
 	OrigAddress OriginAddr
-	// size of ASDU common address， ASDU 公共地址字节数
-	// 应用服务数据单元公共地址的八位位组数目,公共地址是站地址
+	// size of ASDU common address, in octets
+	// Number of octets in the ASDU common address; the common address is the
+	// station address.
 	// The standard requires "a" in [1, 2].
 	CommonAddrSize int
 
-	// size of ASDU information object address. 信息对象地址字节数
+	// size of ASDU information object address, in octets
 	// The standard requires "c" in [1, 3].
 	InfoObjAddrSize int
 
@@ -99,10 +100,10 @@ type Identifier struct {
 	// CommonAddr is a station address. Zero is not used.
 	// The width is controlled by Params.CommonAddrSize.
 	// See companion standard 101, subclass 7.2.4.
-	CommonAddr CommonAddr // station address 公共地址是站地址
+	CommonAddr CommonAddr // station address
 }
 
-// String 返回数据单元标识符的信息,例： "TypeID Cause OrigAddr@CommonAddr"
+// String returns the data unit identifier, e.g. "TypeID Cause OrigAddr@CommonAddr".
 func (id Identifier) String() string {
 	if id.OrigAddr == 0 {
 		return fmt.Sprintf("%s %s @%d", id.Type, id.Coa, id.CommonAddr)
