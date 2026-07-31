@@ -32,8 +32,8 @@ func TestConnection_T2_AcknowledgesBeforeW(t *testing.T) {
 	_, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatal("expected StartDtConfirm")
 	}
 
@@ -59,12 +59,12 @@ func TestConnection_T2_AcknowledgesBeforeW(t *testing.T) {
 
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 	head, _ := readFrame(t, peer)
-	s, ok := head.(sAPCI)
+	s, ok := head.(SAPCI)
 	if !ok {
 		t.Fatalf("got %#v, want an S-frame acknowledgement driven by t₂", head)
 	}
-	if s.rcvSN != 1 {
-		t.Fatalf("S-frame acknowledges %d, want 1", s.rcvSN)
+	if s.RcvSN != 1 {
+		t.Fatalf("S-frame acknowledges %d, want 1", s.RcvSN)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestConnection_TrySendFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 50; i++ {
-			sf.trySendUFrame(uStartDtActive)
+			sf.trySendUFrame(UStartDtActive)
 		}
 	}()
 
@@ -178,7 +178,7 @@ func TestConnection_SendLoop_WriteDeadlineEndsStalledWrite(t *testing.T) {
 
 	// net.Pipe is unbuffered, so this write blocks until the peer reads --
 	// and the peer never does.
-	sf.sendRaw <- newUFrame(uTestFrActive)
+	sf.sendRaw <- newUFrame(UTestFrActive)
 
 	sf.wg.Add(1)
 	stopped := make(chan struct{})
@@ -255,7 +255,7 @@ func TestConnection_CloseDoesNotFreeBlockedRecvLoop(t *testing.T) {
 
 	go func() {
 		for i := 0; i < 2; i++ { // first fills the buffer, second parks recvLoop
-			if _, err := peer.Write(newUFrame(uTestFrActive)); err != nil {
+			if _, err := peer.Write(newUFrame(UTestFrActive)); err != nil {
 				return
 			}
 		}
@@ -289,7 +289,7 @@ func TestConnection_SendRejectsOverlongASDU(t *testing.T) {
 
 	c.SendStartDt()
 	readFrame(t, peer)
-	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	writeFrame(t, peer, newUFrame(UStartDtConfirm))
 	waitFor(t, time.Second, c.IsActive)
 
 	u := asdu.NewASDU(asdu.ParamsWide, asdu.Identifier{
@@ -330,8 +330,8 @@ func TestConnection_KWindowStopsAtK(t *testing.T) {
 
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatal("expected StartDtConfirm")
 	}
 
@@ -353,7 +353,7 @@ func TestConnection_KWindowStopsAtK(t *testing.T) {
 		if _, err := peer.Read(body); err != nil {
 			break
 		}
-		if _, ok := mustParse(append(head, body...)).(iAPCI); ok {
+		if _, ok := mustParse(append(head, body...)).(IAPCI); ok {
 			iFrames++
 		}
 	}

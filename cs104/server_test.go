@@ -174,7 +174,7 @@ func TestServer_SessionChurnLeaksNothing(t *testing.T) {
 			srv.releaseSession(sess)
 		}()
 
-		_, _ = peer.Write(newUFrame(uStartDtActive))
+		_, _ = peer.Write(newUFrame(UStartDtActive))
 		time.Sleep(2 * time.Millisecond)
 		cancel()
 		_ = peer.Close()
@@ -250,7 +250,7 @@ func TestServer_ConcurrentActivationLeavesExactlyOneActive(t *testing.T) {
 		go func(c net.Conn) {
 			defer writers.Done()
 			gate.Wait()
-			_, _ = c.Write(newUFrame(uStartDtActive))
+			_, _ = c.Write(newUFrame(UStartDtActive))
 		}(peer)
 	}
 	gate.Done()

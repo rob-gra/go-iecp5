@@ -77,9 +77,6 @@ root do not cover it — run them in this directory.
 
 ## Note on frame types
 
-Only I-format APDUs carry an ASDU. This checks the control field directly
-rather than type-switching on what `cs104.ParseAPCI` returns, because
-`ParseAPCI` hands back an `any` holding one of `iAPCI`/`sAPCI`/`uAPCI` and
-those types are unexported — there is nothing for an outside caller to assert
-against. Subclass 5.1 defines the I-format APDU as the one whose first
-control octet has bit 1 clear, which is what the check reads.
+Only I-format APDUs carry an ASDU, so each frame is split with
+`cs104.ParseAPCI` and the result type-switched against `cs104.IAPCI`;
+S- and U-format frames are skipped.

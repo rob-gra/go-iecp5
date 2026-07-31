@@ -254,6 +254,13 @@ const (
 	_TypeIDName9 = "F_FR_NA_1F_SR_NA_1F_SC_NA_1F_LS_NA_1F_AF_NA_1F_SG_NA_1F_DR_TA_1F_SC_NB_1"
 )
 
+// String returns the type identification's mnemonic, e.g. "M_ME_NC_1".
+//
+// An id this build has no name for returns "TypeID(200)" rather than a bare
+// number, so it stays distinguishable from a mnemonic wherever the value is
+// recorded. The mnemonic used to be wrapped as "TID<M_ME_NC_1>", which read
+// well in a log line but not in a column something downstream has to match
+// on.
 func (sf TypeID) String() string {
 	var s string
 	switch {
@@ -287,9 +294,12 @@ func (sf TypeID) String() string {
 		sf -= 120
 		s = _TypeIDName9[sf*9 : 9*(sf+1)]
 	default:
-		s = strconv.FormatInt(int64(sf), 10)
+		// Self-describing, so an unrecognized id is not mistaken for a
+		// mnemonic when it lands in a log line or a CSV column. This is the
+		// form stringer generates for an out-of-range value.
+		return "TypeID(" + strconv.FormatInt(int64(sf), 10) + ")"
 	}
-	return "TID<" + s + ">"
+	return s
 }
 
 // VariableStruct is variable structure qualifier

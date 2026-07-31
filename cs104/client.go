@@ -187,15 +187,15 @@ func (sf *Client) running(ctx context.Context) {
 // activations, so it is the confirmations it has to act on.
 func (sf *Client) handleUFrame(function byte) {
 	switch function {
-	case uStartDtConfirm:
+	case UStartDtConfirm:
 		sf.isActive.Store(true)
 		sf.startDtActiveSendSince.Store(nil)
-	case uStopDtConfirm:
+	case UStopDtConfirm:
 		sf.isActive.Store(false)
 		sf.stopDtActiveSendSince.Store(nil)
-	case uTestFrActive:
-		sf.sendUFrame(uTestFrConfirm)
-	case uTestFrConfirm:
+	case UTestFrActive:
+		sf.sendUFrame(UTestFrConfirm)
+	case UTestFrConfirm:
 		sf.testFrAliveSendSince = time.Time{}
 	default:
 		sf.log.Error("ignoring illegal U-frame function", "function", fmt.Sprintf("0x%02x", function))
@@ -303,14 +303,14 @@ func (sf *Client) Close() error {
 func (sf *Client) SendStartDt() {
 	now := time.Now()
 	sf.startDtActiveSendSince.Store(&now)
-	sf.trySendUFrame(uStartDtActive)
+	sf.trySendUFrame(UStartDtActive)
 }
 
 // SendStopDt stop data transmission on this connection
 func (sf *Client) SendStopDt() {
 	now := time.Now()
 	sf.stopDtActiveSendSince.Store(&now)
-	sf.trySendUFrame(uStopDtActive)
+	sf.trySendUFrame(UStopDtActive)
 }
 
 // InterrogationCmd wrap asdu.InterrogationCmd

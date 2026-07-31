@@ -308,21 +308,13 @@ func (s *stream) frames() [][]byte {
 }
 
 func (x *extractor) handleAPDU(apdu []byte, s *stream, ts time.Time) {
-	// Only I-frames carry an ASDU; S- and U-frames are pure APCI.
-	//
-	// This reads the frame type off the control field directly rather than
-	// type-switching on what cs104.ParseAPCI returns. ParseAPCI hands back an
-	// `any` holding one of iAPCI/sAPCI/uAPCI, and those types are unexported,
-	// so a caller outside the package has nothing to assert against. The bit
-	// itself is stable and specified: subclass 5.1 defines the I-format APDU
-	// as the one whose first control octet has bit 1 clear.
-	if apdu[2]&0x01 != 0 {
-		return
-	}
-
-	_, payload, err := cs104.ParseAPCI(apdu)
+	apci, payload, err := cs104.ParseAPCI(apdu)
 	if err != nil {
 		x.undecodable++
+		return
+	}
+	// Only I-format APDUs carry an ASDU; S- and U-format are pure APCI.
+	if _, ok := apci.(cs104.IAPCI); !ok {
 		return
 	}
 
@@ -351,7 +343,7 @@ func (x *extractor) handleAPDU(apdu []byte, s *stream, ts time.Time) {
 	}
 
 	when := ts.Format(x.timeFmt)
-	typeID := typeName(a.Type)
+	typeID := a.Type.String()
 	addr := strconv.FormatUint(uint64(a.CommonAddr), 10)
 
 	if x.perIOA {
@@ -454,27 +446,13 @@ func parseTypeIDs(s string) (map[asdu.TypeID]bool, error) {
 	return out, nil
 }
 
-// typeName returns the bare mnemonic, e.g. "M_ME_NC_1".
-//
-// asdu.TypeID.String decorates it as "TID<M_ME_NC_1>", which reads well in a
-// log line but not in a CSV column that something downstream has to match on.
-// An unrecognized id stringifies to its decimal value, which passes through
-// here unchanged and is the right thing to record: the capture said it, even
-// if this build has no name for it.
-func typeName(id asdu.TypeID) string {
-	s := id.String()
-	s = strings.TrimPrefix(s, "TID<")
-	s = strings.TrimSuffix(s, ">")
-	return strings.TrimSpace(s)
-}
-
 // typeIDByName resolves a symbolic name by asking every type id what it is
 // called. asdu exposes TypeID.String but no reverse lookup, and 256 string
 // comparisons once at startup is not worth a generated table.
 func typeIDByName(name string) (asdu.TypeID, bool) {
 	for i := 0; i <= 255; i++ {
 		id := asdu.TypeID(i)
-		if strings.EqualFold(typeName(id), name) {
+		if strings.EqualFold(id.String(), name) {
 			return id, true
 		}
 	}
