@@ -7,12 +7,13 @@ package cs104
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // timeoutResolution is how often the connection state machine re-checks
@@ -56,8 +57,10 @@ type Server struct {
 	// peer before any session state is allocated for it. See
 	// SetConnectionRequestHandler/AllowClientIPs.
 	connectionRequest func(net.Addr) bool
-	clog.Clog
-	wg sync.WaitGroup
+	// log receives this server's records, and is the base each session's
+	// logger is derived from. See SetLogger.
+	log *slog.Logger
+	wg  sync.WaitGroup
 }
 
 // NewServer new a server, default config and default asdu.ParamsWide params
@@ -69,14 +72,30 @@ func NewServer(handler ServerHandlerInterface) *Server {
 		sessions:      make(map[*SrvSession]struct{}),
 		activeByGroup: make(map[any]*SrvSession),
 		groupQueues:   make(map[any]*messageQueue),
-		Clog:          clog.NewLogger("cs104 server => "),
+		log:           slog.Default().With("component", "cs104.server"),
 	}
+}
+
+// SetLogger directs this server's records (and those of every session it
+// accepts) to l. Records go to slog.Default() when unset. Passing nil
+// restores that default rather than disabling logging -- to silence the
+// library, give it a logger whose handler discards everything.
+//
+// Must be called before ListenAndServer. A session's logger is derived when
+// the connection is accepted, so changing this later affects only sessions
+// accepted afterwards.
+func (sf *Server) SetLogger(l *slog.Logger) *Server {
+	if l == nil {
+		l = slog.Default()
+	}
+	sf.log = l
+	return sf
 }
 
 // SetConfig set config if config is valid it will use DefaultConfig()
 func (sf *Server) SetConfig(cfg Config) *Server {
 	if err := cfg.Valid(); err != nil {
-		sf.Warn("invalid config (%v), falling back to DefaultConfig()", err)
+		sf.log.Warn("rejected config, falling back to DefaultConfig()", "err", err)
 		sf.config = DefaultConfig()
 	} else {
 		sf.config = cfg
@@ -87,7 +106,7 @@ func (sf *Server) SetConfig(cfg Config) *Server {
 // SetParams set asdu params if params is valid it will use asdu.ParamsWide
 func (sf *Server) SetParams(p *asdu.Params) *Server {
 	if err := p.Valid(); err != nil {
-		sf.Warn("invalid asdu params (%v), falling back to asdu.ParamsWide", err)
+		sf.log.Warn("rejected asdu params, falling back to asdu.ParamsWide", "err", err)
 		sf.params = *asdu.ParamsWide
 	} else {
 		sf.params = *p
@@ -180,7 +199,11 @@ func (sf *Server) newSession(conn net.Conn) *SrvSession {
 			rcvASDU: make(chan []byte, sf.config.RecvUnAckLimitW<<4),
 			rcvRaw:  make(chan []byte, sf.config.RecvUnAckLimitW<<5),
 			sendRaw: make(chan []byte, sf.config.SendUnAckLimitK<<5),
-			Clog:    sf.Clog,
+			// Every record from this session carries the peer it belongs to.
+			// Without it a multi-master server's sessions are indistinguishable
+			// in the log, and a line like "no acknowledgement within t₁" names
+			// no connection.
+			log: sf.log.With("remote", conn.RemoteAddr().String()),
 		},
 		handler:            sf.handler,
 		onConnection:       sf.onConnection,
@@ -206,12 +229,11 @@ func (sf *Server) SetTLSConfig(t *tls.Config) *Server {
 func (sf *Server) ListenAndServer(addr string) {
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
-		sf.Error("server run failed, %v", err)
+		sf.log.Error("listen failed", "addr", addr, "err", err)
 		return
 	}
 	if sf.TLSConfig != nil {
 		listen = tls.NewListener(listen, sf.TLSConfig)
-		sf.Debug("server serving TLS")
 	}
 	sf.mux.Lock()
 	sf.listen = listen
@@ -221,13 +243,19 @@ func (sf *Server) ListenAndServer(addr string) {
 	defer func() {
 		cancel()
 		_ = sf.Close()
-		sf.Debug("server stop")
+		sf.log.Info("server stopped")
 	}()
-	sf.Debug("server run")
+	sf.log.Info("server listening", "addr", listen.Addr().String(), "tls", sf.TLSConfig != nil)
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
-			sf.Error("server run failed, %v", err)
+			// Close() closes the listener to stop this loop, so the resulting
+			// Accept failure is the shutdown working, not a fault. Reporting
+			// it as an error would make every clean stop look like one.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			sf.log.Error("accept failed", "err", err)
 			return
 		}
 
@@ -253,7 +281,8 @@ func (sf *Server) ListenAndServer(addr string) {
 // so admission control can be tested without a real net.Listener.
 func (sf *Server) acceptSession(conn net.Conn) *SrvSession {
 	if sf.connectionRequest != nil && !sf.connectionRequest(conn.RemoteAddr()) {
-		sf.Warn("rejected connection from %v: declined by connection request handler", conn.RemoteAddr())
+		sf.log.Warn("rejected connection: declined by connection request handler",
+			"remote", conn.RemoteAddr().String())
 		_ = conn.Close()
 		return nil
 	}
@@ -273,7 +302,8 @@ func (sf *Server) acceptSession(conn net.Conn) *SrvSession {
 	atCapacity := sf.maxConnections > 0 && len(sf.sessions) >= sf.maxConnections
 	sf.mux.Unlock()
 	if atCapacity {
-		sf.Warn("rejected connection from %v: max connections (%d) reached", conn.RemoteAddr(), sf.maxConnections)
+		sf.log.Warn("rejected connection: at max connections",
+			"remote", conn.RemoteAddr().String(), "maxConnections", sf.maxConnections)
 		_ = conn.Close()
 		return nil
 	}
@@ -357,7 +387,7 @@ func (sf *Server) Send(a *asdu.ASDU) error {
 
 	for _, q := range sf.groupQueues {
 		if q.Push(data) {
-			sf.Warn("send queue full, dropped the oldest unsent message")
+			sf.log.Warn("send queue full, dropped oldest unsent message")
 		}
 	}
 	for sess := range sf.sessions {

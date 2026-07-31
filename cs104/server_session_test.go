@@ -3,12 +3,12 @@ package cs104
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // stubServerHandler is a minimal ServerHandlerInterface implementation for tests.
@@ -27,6 +27,13 @@ func (stubServerHandler) ResetProcessHandler(asdu.Connect, *asdu.ASDU, asdu.Qual
 }
 func (stubServerHandler) DelayAcquisitionHandler(asdu.Connect, *asdu.ASDU, uint16) error { return nil }
 func (stubServerHandler) ASDUHandler(asdu.Connect, *asdu.ASDU) error                     { return nil }
+
+// discardLogger returns a logger that emits nothing, so the protocol trace
+// doesn't drown the test output. Tests that care about a record assert on it
+// via their own handler instead.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // fastTestConfig returns a Config with short timeouts so tests don't have to
 // wait on the (1s-255s) IEC-mandated minimums enforced by Config.Valid. It
@@ -60,7 +67,7 @@ func newTestSrvSession(t *testing.T, handler ServerHandlerInterface, cfg Config)
 			sendQueue: newMessageQueue(1024),
 			rcvRaw:    make(chan []byte, 1024),
 			sendRaw:   make(chan []byte, 1024),
-			Clog:      clog.NewLogger("test cs104 => "),
+			log:       discardLogger(),
 		},
 		handler: handler,
 	}

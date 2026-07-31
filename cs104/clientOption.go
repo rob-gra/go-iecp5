@@ -7,12 +7,12 @@ package cs104
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // ClientOption 客户端配置
@@ -31,6 +31,9 @@ type ClientOption struct {
 	// from an accepted one, and the resulting behavior (connection cycling,
 	// throughput collapse) gives no hint of its cause.
 	rejected []string
+	// log, when set, is the base logger NewClient/NewServerSpecial derive
+	// from. Nil means slog.Default(). See SetLogger.
+	log *slog.Logger
 }
 
 // NewOption with default config and default asdu.ParamsWide params
@@ -50,7 +53,7 @@ func NewOption() *ClientOption {
 func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 	if err := cfg.Valid(); err != nil {
 		sf.rejected = append(sf.rejected,
-			fmt.Sprintf("invalid config (%v), falling back to DefaultConfig()", err))
+			fmt.Sprintf("rejected config, falling back to DefaultConfig(): %v", err))
 		sf.config = DefaultConfig()
 	} else {
 		sf.config = cfg
@@ -62,7 +65,7 @@ func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 func (sf *ClientOption) SetParams(p *asdu.Params) *ClientOption {
 	if err := p.Valid(); err != nil {
 		sf.rejected = append(sf.rejected,
-			fmt.Sprintf("invalid asdu params (%v), falling back to asdu.ParamsWide", err))
+			fmt.Sprintf("rejected asdu params, falling back to asdu.ParamsWide: %v", err))
 		sf.params = *asdu.ParamsWide
 	} else {
 		sf.params = *p
@@ -70,11 +73,29 @@ func (sf *ClientOption) SetParams(p *asdu.Params) *ClientOption {
 	return sf
 }
 
+// SetLogger directs the records of the Client or ServerSpecial built from
+// this option to l. Records go to slog.Default() when unset. Passing nil
+// restores that default rather than disabling logging -- to silence the
+// library, give it a logger whose handler discards everything.
+func (sf *ClientOption) SetLogger(l *slog.Logger) *ClientOption {
+	sf.log = l
+	return sf
+}
+
+// logger returns the base logger for this option, defaulting to
+// slog.Default() so a zero-valued or hand-built ClientOption still logs.
+func (sf *ClientOption) logger() *slog.Logger {
+	if sf.log == nil {
+		return slog.Default()
+	}
+	return sf.log
+}
+
 // logRejected reports anything SetConfig/SetParams replaced with defaults,
 // once a logger exists to report it to.
-func (sf *ClientOption) logRejected(log clog.Clog) {
+func (sf *ClientOption) logRejected(log *slog.Logger) {
 	for _, msg := range sf.rejected {
-		log.Warn("%s", msg)
+		log.Warn(msg)
 	}
 }
 

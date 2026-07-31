@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // TestConnection_T2_AcknowledgesBeforeW covers t₂: a peer that stops
@@ -99,7 +98,7 @@ func buildTestMonitorASDU(t *testing.T) []byte {
 func TestConnection_TrySendFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 2),
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	done := make(chan struct{})
@@ -133,7 +132,7 @@ func TestConnection_SendFrame_UnblocksOnTeardown(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 1),
 		ctx:     ctx,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 	sf.sendRaw <- []byte{0} // buffer now full; nothing drains it
 
@@ -174,7 +173,7 @@ func TestConnection_SendLoop_WriteDeadlineEndsStalledWrite(t *testing.T) {
 		sendRaw: make(chan []byte, 4),
 		ctx:     ctx,
 		cancel:  cancel,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	// net.Pipe is unbuffered, so this write blocks until the peer reads --
@@ -214,7 +213,7 @@ func TestConnection_OutboundFrameDefersT3(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 4),
 		ctx:     ctx,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	sf.idleSince = time.Now().Add(-time.Hour) // long idle
@@ -248,7 +247,7 @@ func TestConnection_CloseDoesNotFreeBlockedRecvLoop(t *testing.T) {
 		rcvRaw: make(chan []byte, 1), // fills immediately, nothing drains it
 		ctx:    ctx,
 		cancel: cancel,
-		Clog:   clog.NewLogger("test cs104 => "),
+		log:    discardLogger(),
 	}
 	sf.wg.Add(1)
 	stopped := make(chan struct{})

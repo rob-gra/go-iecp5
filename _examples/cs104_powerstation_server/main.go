@@ -23,6 +23,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -55,7 +57,9 @@ func main() {
 	srv.SetConnectionLostHandler(func(c asdu.Connect) {
 		log.Println("master disconnected")
 	})
-	srv.LogMode(true)
+	// Records go to slog.Default() (info and above) with no setup at all.
+	// Set a debug-level logger to also see the per-frame protocol trace.
+	srv.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	go reportLoop(srv, st)
 

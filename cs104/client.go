@@ -7,12 +7,13 @@ package cs104
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/rand"
 	"sync/atomic"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // Client is an IEC104 master: the controlling station, which dials out and
@@ -51,7 +52,7 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 			sendQueue: newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
 			rcvRaw:    make(chan []byte, o.config.RecvUnAckLimitW<<5),
 			sendRaw:   make(chan []byte, o.config.SendUnAckLimitK<<5),
-			Clog:      clog.NewLogger("cs104 client => "),
+			log:       o.logger().With("component", "cs104.client"),
 		},
 		option:           *o,
 		handler:          handler,
@@ -63,8 +64,23 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 	// which it may reuse or mutate after NewClient returns.
 	c.config = &c.option.config
 	c.params = &c.option.params
-	c.option.logRejected(c.Clog)
+	if o.server != nil {
+		c.log = c.log.With("remote", o.server.Host)
+	}
+	c.option.logRejected(c.log)
 	return c
+}
+
+// SetLogger directs this client's records to l. Records go to slog.Default()
+// when unset. Passing nil restores that default rather than disabling
+// logging -- to silence the library, give it a logger whose handler discards
+// everything.
+func (sf *Client) SetLogger(l *slog.Logger) *Client {
+	if l == nil {
+		l = slog.Default()
+	}
+	sf.log = l
+	return sf
 }
 
 // SetOnConnectHandler set on connect handler
@@ -113,20 +129,20 @@ func (sf *Client) running() {
 		default:
 		}
 
-		sf.Debug("connecting server %+v", sf.option.server)
+		sf.log.Debug("connecting")
 		conn, err := openConnection(sf.option.server, sf.option.TLSConfig, sf.option.config.ConnectTimeout0)
 		if err != nil {
-			sf.Error("connect failed, %v", err)
+			sf.log.Error("connect failed", "err", err)
 			if !sf.option.autoReconnect {
 				return
 			}
 			time.Sleep(sf.option.reconnectInterval)
 			continue
 		}
-		sf.Debug("connect success")
+		sf.log.Info("connected")
 		sf.run(ctx, conn)
 
-		sf.Debug("disconnected server %+v", sf.option.server)
+		sf.log.Info("disconnected")
 		select {
 		case <-ctx.Done():
 			return
@@ -152,7 +168,7 @@ func (sf *Client) handleUFrame(function byte) {
 	case uTestFrConfirm:
 		sf.testFrAliveSendSince = time.Time{}
 	default:
-		sf.Error("illegal U-Frame functions[0x%02x] ignored", function)
+		sf.log.Error("ignoring illegal U-frame function", "function", fmt.Sprintf("0x%02x", function))
 	}
 }
 
@@ -162,7 +178,8 @@ func (sf *Client) roleTimedOut(now time.Time) bool {
 	for _, v := range []*atomic.Int64{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
 		since := v.Load()
 		if since != 0 && now.Sub(time.Unix(0, since)) >= sf.option.config.SendUnAckTimeout1 {
-			sf.Error("start/stop data transfer confirm timeout t₁")
+			sf.log.Error("no STARTDT/STOPDT confirmation within t₁, closing",
+				"t1", sf.option.config.SendUnAckTimeout1)
 			return true
 		}
 	}
@@ -177,11 +194,13 @@ func (sf *Client) notifyDown() { sf.onConnectionLost(sf) }
 func (sf *Client) dispatchASDU(asduPack *asdu.ASDU) error {
 	defer func() {
 		if err := recover(); err != nil {
-			sf.Critical("client handler %+v", err)
+			sf.log.Error("client handler panicked", "panic", err, "type", asduPack.Identifier.Type)
 		}
 	}()
 
-	sf.Debug("ASDU %+v", asduPack)
+	if sf.debugEnabled() {
+		sf.log.Debug("dispatching ASDU", "asdu", asduPack.String())
+	}
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd

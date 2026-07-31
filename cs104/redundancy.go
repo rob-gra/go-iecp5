@@ -131,7 +131,12 @@ func (sf *Server) handleSessionActivated(activated *SrvSession) {
 		return
 	}
 
-	sf.Debug("deactivating connection: superseded by a newly active connection in the same redundancy group")
+	// The state change itself is logged by the superseded connection's own
+	// run loop when it processes the signal, on that session's logger --
+	// which carries its peer address, so the line names the connection that
+	// stood down. Logging it again here would duplicate the event under the
+	// server's logger, attributed to nothing in particular.
+	//
 	// Nothing to hand over: members of a group share one queue (see
 	// Server.queueFor), so whatever the superseded connection had not yet
 	// sent is already what the connection replacing it will pick up.
