@@ -18,6 +18,9 @@ fix.
 - [x] [`Config.Valid` did not enforce the cross-field constraints it documents](#11-configvalid-did-not-enforce-the-cross-field-constraints-it-documents) — implemented: `w <= 2/3 k` and `t₂ < t₁`
 - [x] [Invalid config/params were replaced with defaults silently](#12-invalid-configparams-were-replaced-with-defaults-silently) — implemented: warnings on `Server` and `ClientOption`
 - [x] [Logging is disabled by default, so every warning and error is silent](#13-logging-is-disabled-by-default-so-every-warning-and-error-is-silent) — resolved by moving to `log/slog`
+- [x] [A client's activation timer outlives the connection that started it](#14-a-clients-activation-timer-outlives-the-connection-that-started-it) — implemented: `connRole.roleCleanUp`
+- [x] [Recovering a panicking handler erased the failure](#15-recovering-a-panicking-handler-erased-the-failure) — implemented: named returns on both `dispatchASDU`
+- [x] [`Start` could not report a duplicate start, and lost the monotonic clock](#15b-start-could-not-report-a-duplicate-start-and-activation-timers-lost-the-monotonic-clock) — implemented: `ErrAlreadyStarted`, `atomic.Pointer[time.Time]`
 
 ---
 
@@ -360,3 +363,84 @@ guarded by `connection.debugEnabled`. slog boxes a call's arguments into
 `[]any` before the handler can discard them, so an unguarded `Debug` on the
 frame path allocates on every frame even with debug off: measured at 2
 allocs/94ns per call unguarded versus 0 allocs/5.9ns guarded.
+
+---
+
+## 14. A client's activation timer outlives the connection that started it
+
+**Summary**: `Client.SendStartDt`/`SendStopDt` record when the activation was
+sent, and `roleTimedOut` tears the connection down if no confirmation arrives
+within t₁. `connection.cleanUp` resets the state machine before `run`
+(re)starts — sequence numbers, `testFrAliveSendSince`, the frame buffers —
+but nothing cleared these two fields, and `cleanUp` had no way to reach them:
+they live on `Client`, not on `connection`.
+
+**Impact**: The timestamp survives into the next connection, which never sent
+the activation being timed. An application that issues STARTDT from its
+connect handler overwrites it and never notices. One that issues STARTDT once
+— a reasonable reading of an API where `SendStartDt` is a separate call —
+loses every reconnect to its predecessor's expired timer, in a loop, with the
+log blaming a STARTDT confirmation that the failing connection never asked
+for. Reproduced: with a peer that answers TESTFR but not STARTDT, the client
+opened 4 connections in 3s instead of 2.
+
+**Status: implemented.** `connRole` gains `roleCleanUp`, called from
+`connection.cleanUp` alongside its own reset. `Client` clears both
+timestamps; `SrvSession` is a no-op, matching `roleTimedOut`, which it also
+implements trivially. Covered by
+`TestClient_StaleActivationTimerDoesNotOutliveItsConnection`, whose peer
+answers TESTFR so the connection under test can only be ended by the stale
+timer — a peer that answers nothing loses every connection to an unconfirmed
+TESTFR and the test would pass either way.
+
+---
+
+## 15. Recovering a panicking handler erased the failure
+
+**Summary**: Both `dispatchASDU` implementations recover a panicking
+application handler so it cannot take the connection down. Neither named its
+return value, so recovery left the function returning `nil` — success.
+
+**Impact**: Currently bounded: the caller (`connection.handlerLoop`) only
+logs the error, and the panic itself is already logged with more detail. It
+is a latent trap rather than a live defect — the moment anything acts on that
+return (a negative confirmation to the peer, a metric, a retry), a handler
+that blew up will read as one that succeeded.
+
+**Status: implemented.** Both use a named return and set it from the
+`recover` block, carrying what the handler panicked with. Covered by
+`TestClient_HandlerPanicSurfacesAsError` and
+`TestSrvSession_HandlerPanicSurfacesAsError`.
+
+---
+
+## 15b. `Start` could not report a duplicate start, and activation timers lost the monotonic clock
+
+**Summary**: Two smaller defects on the same call path.
+
+`Client.Start`/`serverSpec.Start` spawned `running`, which claimed the
+`initial -> disconnected` transition with a CAS. Since the CAS ran in the new
+goroutine, `Start` had already returned `nil`: a second `Start` on a running
+client reported success and did nothing.
+
+Separately, the activation timestamps were stored as Unix nanoseconds in an
+`atomic.Int64`. `time.Unix` yields a `time.Time` with no monotonic reading,
+so the `now.Sub(...)` in `roleTimedOut` fell back to the wall clock — the one
+timer in the state machine that did, every other one holding a `time.Time`
+throughout. A clock step (NTP correction, a resumed VM) could fire t₁ early
+or skip it.
+
+**Impact**: The duplicate start hides a caller bug. The monotonic loss is
+narrow but real: t₁ is 15s by default, so any step larger than a few seconds
+during an outstanding STARTDT/STOPDT distorts it.
+
+**Status: implemented.** `Start` now performs the CAS itself and installs
+`closeCancel` under the same lock, returning `ErrAlreadyStarted` on a
+duplicate; `running` takes the `ctx` as a parameter. Holding the lock across
+both keeps `Close` working for a caller that calls it the instant `Start`
+returns. The timestamps are `atomic.Pointer[time.Time]`, which preserves the
+monotonic reading and stays typed — the reason the original avoided
+`atomic.Value`, whose `any` unwraps to the zero time on a failed assertion,
+indistinguishable from "not waiting". Covered by
+`TestClient_StartTwiceReportsAlreadyStarted` and
+`TestClient_CloseImmediatelyAfterStart`.

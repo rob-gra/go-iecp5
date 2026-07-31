@@ -298,6 +298,7 @@ func TestSrvSession_CleanUp_PreservesSendQueue(t *testing.T) {
 		rcvRaw:    make(chan []byte, 1),
 		sendRaw:   make(chan []byte, 1),
 	}}
+	sess.role = sess // as every real construction does; cleanUp calls into it
 	sess.sendQueue.Push([]byte("pending"))
 
 	sess.cleanUp()

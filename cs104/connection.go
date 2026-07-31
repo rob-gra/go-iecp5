@@ -38,6 +38,12 @@ type connRole interface {
 	// which tears the connection down. Only the controlling station has any:
 	// it waits for STARTDT/STOPDT confirmations that it alone sends.
 	roleTimedOut(now time.Time) bool
+	// roleCleanUp discards role-specific per-connection state before run
+	// (re)starts, alongside connection.cleanUp's own. Whatever roleTimedOut
+	// measures has to be reset here: a timer left running from the previous
+	// connection would otherwise expire against the new one, which never
+	// did the thing being timed.
+	roleCleanUp()
 	// notifyUp and notifyDown inform the application of connection state.
 	// They are separate from the connRole's own bookkeeping because the two
 	// roles hand the application different receiver types.
@@ -416,6 +422,7 @@ func (sf *connection) cleanUp() {
 	sf.seqNoSend = 0
 	sf.pending = nil
 	sf.testFrAliveSendSince = time.Time{}
+	sf.role.roleCleanUp()
 	sf.isActive.Store(false)
 	// Client and ServerSpecial reuse one value across reconnects, so re-arm
 	// the deactivate signal for the new connection's lifetime.

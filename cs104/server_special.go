@@ -84,27 +84,33 @@ func (sf *serverSpec) SetConnectionLostHandler(f func(c asdu.Connect)) {
 	sf.connectionLost = f
 }
 
-// Start start the server,and return quickly,if it nil,the server will disconnected background,other failed
+// Start begins connecting in the background and returns immediately. A nil
+// return means the station was started, not that it connected. See
+// Client.Start, which this mirrors, for how outcomes are reported.
+//
+// Starting an already-running station returns ErrAlreadyStarted.
 func (sf *serverSpec) Start() error {
 	if sf.option.server == nil {
 		return errors.New("empty remote server")
 	}
 
-	go sf.running()
+	// Claimed here rather than inside running, for the reasons given on
+	// Client.Start.
+	sf.connMu.Lock()
+	if !sf.status.CompareAndSwap(initial, disconnected) {
+		sf.connMu.Unlock()
+		return ErrAlreadyStarted
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	sf.closeCancel = cancel
+	sf.connMu.Unlock()
+
+	go sf.running(ctx)
 	return nil
 }
 
 // 增加重连间隔
-func (sf *serverSpec) running() {
-	var ctx context.Context
-
-	sf.connMu.Lock()
-	if !sf.status.CompareAndSwap(initial, disconnected) {
-		sf.connMu.Unlock()
-		return
-	}
-	ctx, sf.closeCancel = context.WithCancel(context.Background())
-	sf.connMu.Unlock()
+func (sf *serverSpec) running(ctx context.Context) {
 	defer sf.setConnectStatus(initial)
 
 	for {
