@@ -381,6 +381,16 @@ func (sf *Server) Send(a *asdu.ASDU) error {
 	if err != nil {
 		return err
 	}
+	// Same check connection.Send makes, for the same reason: past this point
+	// the ASDU is bytes on a queue, and an over-long one can only be dropped
+	// when sendIFrame fails to frame it. Without the check here the caller is
+	// told nil for a message that can never be delivered, and a copy of it
+	// occupies a slot in every group queue and every ungrouped session --
+	// where, the queues being evict-oldest, it can displace data that would
+	// have been sent.
+	if len(data) > asdu.ASDUSizeMax {
+		return asdu.ErrLengthOutOfRange
+	}
 
 	sf.mux.Lock()
 	defer sf.mux.Unlock()

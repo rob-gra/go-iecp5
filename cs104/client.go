@@ -25,18 +25,24 @@ type Client struct {
 	option  ClientOption
 	handler ClientHandlerInterface
 
-	// startDtActiveSendSince and stopDtActiveSendSince are when a STARTDT
-	// or STOPDT activation was sent and is still awaiting confirmation, in
-	// Unix nanoseconds; zero means none is outstanding. Atomic because
-	// SendStartDt/SendStopDt run on the application's goroutine while run
-	// reads them from its own.
+	// startDtActiveSendSince and stopDtActiveSendSince are when a STARTDT or
+	// STOPDT activation was sent and is still awaiting confirmation; nil
+	// means none is outstanding. Atomic because SendStartDt/SendStopDt run
+	// on the application's goroutine while run reads them from its own.
 	//
-	// An int64 rather than an atomic.Value holding a time.Time: Value
-	// hands back any, and the assertion unwrapping it yields the
-	// zero time on failure -- indistinguishable from "not waiting", so a
-	// missed confirmation would go unnoticed rather than time out.
-	startDtActiveSendSince atomic.Int64
-	stopDtActiveSendSince  atomic.Int64
+	// A typed atomic.Pointer rather than an atomic.Value: Value hands back
+	// any, and the assertion unwrapping it yields the zero time on failure
+	// -- indistinguishable from "not waiting", so a missed confirmation
+	// would go unnoticed rather than time out.
+	//
+	// And a *time.Time rather than Unix nanoseconds in an atomic.Int64,
+	// which is what this was: time.Unix strips the monotonic reading, so
+	// the elapsed-time comparison in roleTimedOut fell back to the wall
+	// clock and a clock step (NTP, a resumed VM) could fire t₁ early or
+	// late. Every other timer in the state machine keeps its monotonic
+	// reading by holding a time.Time; this one now does too.
+	startDtActiveSendSince atomic.Pointer[time.Time]
+	stopDtActiveSendSince  atomic.Pointer[time.Time]
 
 	closeCancel context.CancelFunc
 
@@ -48,6 +54,12 @@ type Client struct {
 func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 	c := &Client{
 		connection: connection{
+			// Sized as multiples of the protocol windows so a burst several
+			// windows deep is absorbed rather than backpressured frame by
+			// frame. The multipliers (16x, 32x) are headroom chosen for that
+			// effect, not values the standard specifies -- w and k bound what
+			// may be in flight unacknowledged, not what may be buffered
+			// behind it.
 			rcvASDU:   make(chan []byte, o.config.RecvUnAckLimitW<<4),
 			sendQueue: newMessageQueue(int(o.config.SendUnAckLimitK) << 4),
 			rcvRaw:    make(chan []byte, o.config.RecvUnAckLimitW<<5),
@@ -99,27 +111,44 @@ func (sf *Client) SetConnectionLostHandler(f func(c *Client)) *Client {
 	return sf
 }
 
-// Start start the server,and return quickly,if it nil,the server will disconnected background,other failed
+// Start begins connecting in the background and returns immediately. A nil
+// return means the client was started, not that it connected.
+//
+// Connection outcomes are reported through the handlers, not from here:
+// SetOnConnectHandler once a connection is up, SetConnectionLostHandler when
+// one ends. A dial that fails is logged and retried per SetAutoReconnect; if
+// auto-reconnect is disabled, the first failed dial stops the client for
+// good, and since no connection was ever established the connection-lost
+// handler does not run -- the error is only reported to the logger.
+//
+// Starting an already-running client returns ErrAlreadyStarted.
 func (sf *Client) Start() error {
 	if sf.option.server == nil {
 		return errors.New("empty remote server")
 	}
 
-	go sf.running()
-	return nil
-}
-
-// running dials the remote server, runs the connection, and reconnects.
-func (sf *Client) running() {
-	var ctx context.Context
-
+	// Claim the transition here rather than inside running: doing it in the
+	// goroutine means Start has already returned nil by the time a duplicate
+	// is detected, so the caller cannot be told. Taking closeCancel under the
+	// same lock keeps Close working for a caller that calls it the instant
+	// Start returns, before the goroutine has run at all.
 	sf.connMu.Lock()
 	if !sf.status.CompareAndSwap(initial, disconnected) {
 		sf.connMu.Unlock()
-		return
+		return ErrAlreadyStarted
 	}
-	ctx, sf.closeCancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	sf.closeCancel = cancel
 	sf.connMu.Unlock()
+
+	go sf.running(ctx)
+	return nil
+}
+
+// running dials the remote server, runs the connection, and reconnects. The
+// status transition and ctx are established by Start, which is what lets it
+// report a duplicate start to the caller.
+func (sf *Client) running(ctx context.Context) {
 	defer sf.setConnectStatus(initial)
 
 	for {
@@ -147,7 +176,8 @@ func (sf *Client) running() {
 		case <-ctx.Done():
 			return
 		default:
-			// 随机500ms-1s的重试，避免快速重试造成服务器许多无效连接
+			// Wait a random 500ms-1s before retrying, so a fast reconnect loop
+			// does not leave the server with a pile of dead connections.
 			time.Sleep(time.Millisecond * time.Duration(500+rand.Intn(500)))
 		}
 	}
@@ -159,10 +189,10 @@ func (sf *Client) handleUFrame(function byte) {
 	switch function {
 	case uStartDtConfirm:
 		sf.isActive.Store(true)
-		sf.startDtActiveSendSince.Store(0)
+		sf.startDtActiveSendSince.Store(nil)
 	case uStopDtConfirm:
 		sf.isActive.Store(false)
-		sf.stopDtActiveSendSince.Store(0)
+		sf.stopDtActiveSendSince.Store(nil)
 	case uTestFrActive:
 		sf.sendUFrame(uTestFrConfirm)
 	case uTestFrConfirm:
@@ -175,9 +205,8 @@ func (sf *Client) handleUFrame(function byte) {
 // roleTimedOut implements connRole: t₁ also covers the STARTDT and STOPDT
 // activations that only the controlling station sends.
 func (sf *Client) roleTimedOut(now time.Time) bool {
-	for _, v := range []*atomic.Int64{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
-		since := v.Load()
-		if since != 0 && now.Sub(time.Unix(0, since)) >= sf.option.config.SendUnAckTimeout1 {
+	for _, v := range []*atomic.Pointer[time.Time]{&sf.startDtActiveSendSince, &sf.stopDtActiveSendSince} {
+		if since := v.Load(); since != nil && now.Sub(*since) >= sf.option.config.SendUnAckTimeout1 {
 			sf.log.Error("no STARTDT/STOPDT confirmation within t₁, closing",
 				"t1", sf.option.config.SendUnAckTimeout1)
 			return true
@@ -186,15 +215,33 @@ func (sf *Client) roleTimedOut(now time.Time) bool {
 	return false
 }
 
+// roleCleanUp implements connRole, discarding any activation still awaiting
+// confirmation when the previous connection ended.
+//
+// Without this the timestamps outlive the connection they belong to, and
+// roleTimedOut measures them against the next one -- which never sent the
+// activation being timed. An application that issues STARTDT once rather
+// than on every reconnect then loses each fresh connection to its
+// predecessor's expired timer, reconnecting in a loop.
+func (sf *Client) roleCleanUp() {
+	sf.startDtActiveSendSince.Store(nil)
+	sf.stopDtActiveSendSince.Store(nil)
+}
+
 func (sf *Client) notifyUp()   { sf.onConnect(sf) }
 func (sf *Client) notifyDown() { sf.onConnectionLost(sf) }
 
 // dispatchASDU implements connRole, routing a received ASDU to the
 // application's handler.
-func (sf *Client) dispatchASDU(asduPack *asdu.ASDU) error {
+func (sf *Client) dispatchASDU(asduPack *asdu.ASDU) (err error) {
 	defer func() {
-		if err := recover(); err != nil {
-			sf.log.Error("client handler panicked", "panic", err, "type", asduPack.Identifier.Type)
+		if r := recover(); r != nil {
+			sf.log.Error("client handler panicked", "panic", r, "type", asduPack.Identifier.Type)
+			// Named return, so the panic surfaces as a failure rather than
+			// as the nil an unnamed return would leave behind -- which would
+			// make a handler that blew up indistinguishable from one that
+			// succeeded.
+			err = fmt.Errorf("client handler panicked: %v", r)
 		}
 	}()
 
@@ -254,13 +301,15 @@ func (sf *Client) Close() error {
 
 // SendStartDt start data transmission on this connection
 func (sf *Client) SendStartDt() {
-	sf.startDtActiveSendSince.Store(time.Now().UnixNano())
+	now := time.Now()
+	sf.startDtActiveSendSince.Store(&now)
 	sf.trySendUFrame(uStartDtActive)
 }
 
 // SendStopDt stop data transmission on this connection
 func (sf *Client) SendStopDt() {
-	sf.stopDtActiveSendSince.Store(time.Now().UnixNano())
+	now := time.Now()
+	sf.stopDtActiveSendSince.Store(&now)
 	sf.trySendUFrame(uStopDtActive)
 }
 

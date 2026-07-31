@@ -69,6 +69,10 @@ func (sf *SrvSession) handleUFrame(function byte) {
 // activation of its own, so it has no confirmation of its own to wait for.
 func (sf *SrvSession) roleTimedOut(time.Time) bool { return false }
 
+// roleCleanUp implements connRole. Nothing to reset: the controlled station
+// runs no timer of its own, per roleTimedOut.
+func (sf *SrvSession) roleCleanUp() {}
+
 func (sf *SrvSession) notifyUp() {
 	if sf.onConnection != nil {
 		sf.onConnection(sf)
@@ -105,10 +109,15 @@ func (sf *SrvSession) commonAddrAllowed(ca asdu.CommonAddr) bool {
 // A malformed information object gets an UnknownIOA reply rather than
 // being passed to the handler: the peer sent something this station cannot
 // act on, and saying so is more use to it than silence.
-func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
+func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) (err error) {
 	defer func() {
-		if err := recover(); err != nil {
-			sf.log.Error("server handler panicked", "panic", err, "type", asduPack.Identifier.Type)
+		if r := recover(); r != nil {
+			sf.log.Error("server handler panicked", "panic", r, "type", asduPack.Identifier.Type)
+			// Named return, so the panic surfaces as a failure rather than
+			// as the nil an unnamed return would leave behind -- which would
+			// make a handler that blew up indistinguishable from one that
+			// succeeded.
+			err = fmt.Errorf("server handler panicked: %v", r)
 		}
 	}()
 

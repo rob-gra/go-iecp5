@@ -53,10 +53,10 @@ func TestParseStepPosition(t *testing.T) {
 		args args
 		want StepPosition
 	}{
-		{"值0xc0 处于瞬变状态", args{0xc0}, StepPosition{-64, true}},
-		{"值0x40 未在瞬变状态", args{0x40}, StepPosition{-64, false}},
-		{"值0x87 处于瞬变状态", args{0x87}, StepPosition{0x07, true}},
-		{"值0x07 未在瞬变状态", args{0x07}, StepPosition{0x07, false}},
+		{"0xc0, in transient state", args{0xc0}, StepPosition{-64, true}},
+		{"0x40, not in transient state", args{0x40}, StepPosition{-64, false}},
+		{"0x87, in transient state", args{0x87}, StepPosition{0x07, true}},
+		{"0x07, not in transient state", args{0x07}, StepPosition{0x07, false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

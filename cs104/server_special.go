@@ -84,27 +84,33 @@ func (sf *serverSpec) SetConnectionLostHandler(f func(c asdu.Connect)) {
 	sf.connectionLost = f
 }
 
-// Start start the server,and return quickly,if it nil,the server will disconnected background,other failed
+// Start begins connecting in the background and returns immediately. A nil
+// return means the station was started, not that it connected. See
+// Client.Start, which this mirrors, for how outcomes are reported.
+//
+// Starting an already-running station returns ErrAlreadyStarted.
 func (sf *serverSpec) Start() error {
 	if sf.option.server == nil {
 		return errors.New("empty remote server")
 	}
 
-	go sf.running()
-	return nil
-}
-
-// 增加重连间隔
-func (sf *serverSpec) running() {
-	var ctx context.Context
-
+	// Claimed here rather than inside running, for the reasons given on
+	// Client.Start.
 	sf.connMu.Lock()
 	if !sf.status.CompareAndSwap(initial, disconnected) {
 		sf.connMu.Unlock()
-		return
+		return ErrAlreadyStarted
 	}
-	ctx, sf.closeCancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	sf.closeCancel = cancel
 	sf.connMu.Unlock()
+
+	go sf.running(ctx)
+	return nil
+}
+
+// running dials the remote server, runs the connection, and reconnects.
+func (sf *serverSpec) running(ctx context.Context) {
 	defer sf.setConnectStatus(initial)
 
 	for {
@@ -131,7 +137,8 @@ func (sf *serverSpec) running() {
 		case <-ctx.Done():
 			return
 		default:
-			// 随机500ms-1s的重试，避免快速重试造成服务器许多无效连接
+			// Wait a random 500ms-1s before retrying, so a fast reconnect loop
+			// does not leave the server with a pile of dead connections.
 			time.Sleep(time.Millisecond * time.Duration(500+rand.Intn(500)))
 		}
 	}
