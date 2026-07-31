@@ -222,3 +222,49 @@ func TestCP56Time2a_SummerTimeBit(t *testing.T) {
 		t.Error("SU set when encoding in UTC")
 	}
 }
+
+// CP24Time2a carries only milliseconds, seconds and minutes. Decoding must
+// therefore be a pure function of the three octets: it used to complete the
+// date and hour from time.Now(), which made the same bytes decode differently
+// depending on when they were read.
+func TestParseCP24Time2a_IsDeterministic(t *testing.T) {
+	b := []byte{0x0b, 0x0c, 0x0d} // 13 minutes, 3083 ms
+
+	first := ParseCP24Time2a(b, time.UTC)
+	second := ParseCP24Time2a(b, time.UTC)
+	if !first.Equal(second) {
+		t.Fatalf("same bytes decoded to %v then %v", first, second)
+	}
+
+	// Only the fields the encoding carries are set.
+	if first.Minute() != 13 || first.Second() != 3 || first.Nanosecond()/int(time.Millisecond) != 83 {
+		t.Fatalf("got %02d:%02d.%03d, want 13 minutes 3.083 s",
+			first.Minute(), first.Second(), first.Nanosecond()/int(time.Millisecond))
+	}
+	// Nothing invented for the parts it does not carry.
+	if first.Year() != 1 || first.Month() != time.January || first.Day() != 1 || first.Hour() != 0 {
+		t.Fatalf("decoding invented a date/hour: %v", first)
+	}
+}
+
+// The year field is seven bits holding 0-99, so it reduces modulo 100.
+// `Year() - 2000` went negative before 2000 and overflowed the field from
+// 2100, in both cases writing a year that was never asked for -- and, past
+// 2127, spilling into the reserved bit.
+func TestCP56Time2a_YearWrapsWithinTheField(t *testing.T) {
+	for _, tc := range []struct {
+		year int
+		want byte
+	}{
+		{2000, 0}, {2019, 19}, {2099, 99}, {2100, 0}, {2145, 45}, {1999, 99},
+	} {
+		ts := time.Date(tc.year, 6, 1, 12, 0, 0, 0, time.UTC)
+		got := CP56Time2a(ts, time.UTC)[6]
+		if got&0x80 != 0 {
+			t.Errorf("year %d: reserved bit 7 set (%#02x)", tc.year, got)
+		}
+		if got != tc.want {
+			t.Errorf("year %d: encoded %d, want %d", tc.year, got, tc.want)
+		}
+	}
+}

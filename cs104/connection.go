@@ -38,6 +38,13 @@ type connRole interface {
 	// which tears the connection down. Only the controlling station has any:
 	// it waits for STARTDT/STOPDT confirmations that it alone sends.
 	roleTimedOut(now time.Time) bool
+	// sFrameWhileStoppedIsFatal reports whether an S-frame arriving while
+	// data transfer is stopped should close the connection. The two ends
+	// genuinely differ here, and lib60870 differs the same way: its
+	// controlled station closes ("S message in stopped state -> active
+	// close"), its controlling station validates the sequence number and
+	// carries on.
+	sFrameWhileStoppedIsFatal() bool
 	// roleCleanUp discards role-specific per-connection state before run
 	// (re)starts, alongside connection.cleanUp's own. Whatever roleTimedOut
 	// measures has to be reset here: a timer left running from the previous
@@ -537,8 +544,18 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// connected as a standby so we can be reactivated later without
 			// the peer having to reconnect.
 			sf.log.Info("deactivating: superseded by another connection in the redundancy group")
-			sf.sendUFrame(UStopDtConfirm)
 			sf.isActive.Store(false)
+			// Same rule as a peer-requested STOPDT: do not claim the
+			// connection is quiesced while I-frames this end sent are still
+			// unacknowledged. It also keeps the peer's acknowledgement legal
+			// -- without the pending state an S-frame arriving after the
+			// hand-off would now close the standby this is trying to keep
+			// alive.
+			if sf.ackNoSend != sf.seqNoSend {
+				sf.stopDtPending = true
+				break
+			}
+			sf.sendUFrame(UStopDtConfirm)
 
 		case <-sf.sendQueue.Ready():
 			continue
@@ -589,6 +606,17 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 				if sf.debugEnabled() {
 					sf.log.Debug("rx S-frame", "rcvSN", head.RcvSN)
 				}
+				// Subclass 5.3 exchanges only U-format frames in the stopped
+				// state. The one exception is the window between accepting a
+				// STOPDT and confirming it: the acknowledgement that releases
+				// the confirmation is itself an S-frame, so it has to be let
+				// through -- lib60870 allows it in the same window
+				// (M_CON_STATE_UNCONFIRMED_STOPPED, "only U, S frames").
+				if !sf.IsActive() && !sf.stopDtPending && sf.role.sFrameWhileStoppedIsFatal() {
+					sf.log.Error("S-frame received while data transfer is stopped, closing",
+						"rcvSN", head.RcvSN)
+					return
+				}
 				if !sf.updateAckNoOut(head.RcvSN) {
 					sf.log.Error("acknowledgement outside the outstanding window, closing",
 						"rcvSN", head.RcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
@@ -599,6 +627,15 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			case IAPCI:
 				if sf.debugEnabled() {
 					sf.log.Debug("rx I-frame", "sendSN", head.SendSN, "rcvSN", head.RcvSN)
+				}
+				// An I-format APDU is information transfer, so it has to
+				// carry some. A frame whose ASDU is empty is malformed at the
+				// APCI level, before any question of whether the ASDU parses.
+				// lib60870 rejects the same thing as "I msg too small"
+				// (msgSize < 7: six octets of APCI and at least one of ASDU).
+				if len(asduVal) == 0 {
+					sf.log.Error("I-frame carries no ASDU, closing", "sendSN", head.SendSN)
+					return
 				}
 				if !sf.IsActive() {
 					// Subclass 5.3: no user data is transferred in the

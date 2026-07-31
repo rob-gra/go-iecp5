@@ -389,3 +389,91 @@ func TestSrvSession_CleanUp_PreservesSendQueue(t *testing.T) {
 		t.Fatalf("cleanUp must not discard queued outbound messages: got %q, ok=%v", got, ok)
 	}
 }
+
+// An I-format APDU is information transfer, so one carrying no ASDU is
+// malformed at the APCI level -- before any question of whether the ASDU
+// parses. lib60870 rejects the same frame as "I msg too small".
+func TestSrvSession_IFrameWithoutASDUClosesConnection(t *testing.T) {
+	// Timers well clear of the observation window: with fastTestConfig's
+	// 300ms t₃ the peer's unanswered TESTFR closes the connection inside a
+	// second, and the test would pass whether or not the frame was rejected.
+	cfg := fastTestConfig()
+	cfg.SendUnAckTimeout1 = 5 * time.Second
+	cfg.RecvUnAckTimeout2 = 4 * time.Second
+	cfg.IdleTimeout3 = 10 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
+
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
+		t.Fatal("expected StartDtConfirm")
+	}
+
+	// A well-formed I-format APCI with an empty payload.
+	writeFrame(t, peer, []byte{startFrame, 0x04, 0x00, 0x00, 0x00, 0x00})
+
+	waitFor(t, time.Second, func() bool { return !sess.IsConnected() })
+	if sess.IsConnected() {
+		t.Fatal("an I-frame carrying no ASDU must close the connection")
+	}
+}
+
+// Subclass 5.3 exchanges only U-format frames in the stopped state, and the
+// controlled station enforces it -- as lib60870's does ("S message in stopped
+// state -> active close").
+func TestSrvSession_SFrameWhileStoppedClosesConnection(t *testing.T) {
+	// Long timers, for the reason given on the empty-ASDU test above.
+	cfg := fastTestConfig()
+	cfg.SendUnAckTimeout1 = 5 * time.Second
+	cfg.RecvUnAckTimeout2 = 4 * time.Second
+	cfg.IdleTimeout3 = 10 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
+
+	// Never activated, so the session is stopped and nothing is outstanding.
+	writeFrame(t, peer, newSFrame(0))
+
+	waitFor(t, time.Second, func() bool { return !sess.IsConnected() })
+	if sess.IsConnected() {
+		t.Fatal("an S-frame in the stopped state must close the connection")
+	}
+}
+
+// The exception: between accepting a STOPDT and confirming it, an S-frame is
+// exactly what is being waited for. Closing on it would deadlock the
+// handshake this library performs itself.
+func TestSrvSession_SFrameAllowedWhileStopDtPending(t *testing.T) {
+	cfg := fastTestConfig()
+	cfg.SendUnAckTimeout1 = 5 * time.Second
+	cfg.RecvUnAckTimeout2 = 4 * time.Second
+	cfg.IdleTimeout3 = 10 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+	_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	readFrame(t, peer)
+
+	sess.enqueue(buildTestMonitorASDU(t))
+	if head, _ := readFrame(t, peer); !isIFrame(head) {
+		t.Fatal("expected the queued ASDU as an I-frame")
+	}
+
+	writeFrame(t, peer, newUFrame(UStopDtActive))
+	waitFor(t, time.Second, func() bool { return !sess.IsActive() })
+
+	// The acknowledgement arrives while stopped-but-unconfirmed. It must be
+	// accepted, and it must release the confirmation.
+	writeFrame(t, peer, newSFrame(1))
+
+	head, _ := readFrame(t, peer)
+	u, ok := head.(UAPCI)
+	if !ok || u.Function != UStopDtConfirm {
+		t.Fatalf("got %#v, want StopDtConfirm released by the acknowledgement", head)
+	}
+	if !sess.IsConnected() {
+		t.Fatal("the acknowledgement that releases the confirmation must not close the connection")
+	}
+}

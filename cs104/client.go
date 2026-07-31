@@ -223,6 +223,11 @@ func (sf *Client) roleTimedOut(now time.Time) bool {
 // activation being timed. An application that issues STARTDT once rather
 // than on every reconnect then loses each fresh connection to its
 // predecessor's expired timer, reconnecting in a loop.
+// sFrameWhileStoppedIsFatal implements connRole. The controlling station
+// tolerates it: an acknowledgement for data it already sent is harmless, and
+// lib60870's master likewise only validates the sequence number.
+func (sf *Client) sFrameWhileStoppedIsFatal() bool { return false }
+
 func (sf *Client) roleCleanUp() {
 	sf.startDtActiveSendSince.Store(nil)
 	sf.stopDtActiveSendSince.Store(nil)

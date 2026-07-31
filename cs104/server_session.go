@@ -98,6 +98,11 @@ func (sf *SrvSession) roleTimedOut(time.Time) bool { return false }
 // runs no timer of its own, per roleTimedOut.
 func (sf *SrvSession) roleCleanUp() {}
 
+// sFrameWhileStoppedIsFatal implements connRole. The controlled station is
+// the one the standard's state machine constrains here, and lib60870's does
+// the same.
+func (sf *SrvSession) sFrameWhileStoppedIsFatal() bool { return true }
+
 func (sf *SrvSession) notifyUp() {
 	if sf.onConnection != nil {
 		sf.onConnection(sf)

@@ -45,8 +45,19 @@ func CP56Time2a(t time.Time, loc *time.Location) []byte {
 		hour |= 0x80
 	}
 
+	// The year field is seven bits holding 0-99, so a century is simply not
+	// representable and every implementation reduces modulo 100 -- lib60870's
+	// CP56Time2a_setYear does the same. `Year() - 2000` did not: before 2000
+	// it went negative and wrapped, and from 2100 it overflowed the field into
+	// the reserved bit. ParseCP56Time2a reads the result back as 20xx, which
+	// is the convention this encoding carries.
+	year := ts.Year() % 100
+	if year < 0 {
+		year += 100
+	}
+
 	return []byte{byte(msec), byte(msec >> 8), byte(ts.Minute()), hour,
-		byte(dayOfWeek<<5) | byte(ts.Day()), byte(ts.Month()), byte(ts.Year() - 2000)}
+		byte(dayOfWeek<<5) | byte(ts.Day()), byte(ts.Month()), byte(year) & 0x7f}
 }
 
 // ParseCP56Time2a decodes CP56Time2a, a seven-octet binary time: it reads 7
@@ -86,33 +97,37 @@ func CP24Time2a(t time.Time, loc *time.Location) []byte {
 	return []byte{byte(msec), byte(msec >> 8), byte(ts.Minute())}
 }
 
-// ParseCP24Time2a decodes CP24Time2a, a three-octet binary time: it reads 3
-// bytes and returns the time. UTC is recommended for all time tags.
+// ParseCP24Time2a decodes CP24Time2a, a three-octet binary time.
 // See companion standard 101, subclass 7.2.6.19.
+//
+// CP24Time2a carries milliseconds, seconds and minutes -- no hour, and no
+// date. The returned value therefore sets only those fields, on the zero
+// date: reading a field this encoding does not carry would be reading a
+// value that was never sent. Completing it belongs to the application, which
+// is the only party that knows which hour the frame refers to.
+//
+// This used to fill the missing fields from time.Now(), which made decoding
+// non-deterministic, wrong for a captured or replayed frame, and liable to
+// attribute a frame to the wrong hour when it arrived either side of an hour
+// boundary. lib60870 exposes only getMillisecond and getMinute for the same
+// reason, and never synthesizes a timestamp.
+//
+// A zero return means the frame carried the invalid flag; note that a valid
+// frame reading zero milliseconds in minute zero is indistinguishable from
+// it, as it is for ParseCP56Time2a.
 func ParseCP24Time2a(bytes []byte, loc *time.Location) time.Time {
 	if len(bytes) < 3 || bytes[2]&0x80 == 0x80 {
 		return time.Time{}
 	}
-	x := int(binary.LittleEndian.Uint16(bytes))
-	msec := x % 1000
-	sec := (x / 1000)
-	min := int(bytes[2] & 0x3f)
-	now := time.Now()
-	year, month, day := now.Date()
-	hour, _, _ := now.Clock()
-
-	nsec := msec * int(time.Millisecond)
 	if loc == nil {
 		loc = time.UTC
 	}
-	val := time.Date(year, month, day, hour, min, sec, nsec, loc)
+	x := int(binary.LittleEndian.Uint16(bytes))
+	msec := x % 1000
+	sec := x / 1000
+	min := int(bytes[2] & 0x3f)
 
-	////5 minute rounding - 55 minute span
-	//if min > currentMin+5 {
-	//	val = val.Add(-time.Hour)
-	//}
-
-	return val
+	return time.Date(1, time.January, 1, 0, min, sec, msec*int(time.Millisecond), loc)
 }
 
 // CP16Time2a encodes milliseconds as CP16Time2a, a two-octet binary time.

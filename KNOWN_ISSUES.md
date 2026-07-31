@@ -27,7 +27,7 @@ fix.
 - [x] [An I-frame in the stopped state was discarded without being counted](#19-an-i-frame-in-the-stopped-state-was-discarded-without-being-counted) — implemented: closes the connection
 - [x] [STOPDT was confirmed while sent I-frames were still unacknowledged](#20-stopdt-was-confirmed-while-sent-i-frames-were-still-unacknowledged) — implemented: `confirmStopDtIfSettled`
 - [x] [CP56Time2a encoded Sunday as "not used" and never set the SU bit](#21-cp56time2a-encoded-sunday-as-not-used-and-never-set-the-su-bit) — implemented
-- [ ] [Smaller divergences from lib60870, not addressed](#22-smaller-divergences-from-lib60870-not-addressed)
+- [x] [Smaller divergences from lib60870](#22-smaller-divergences-from-lib60870) — all four implemented
 
 ---
 
@@ -647,21 +647,62 @@ transition stays ambiguous.
 
 ---
 
-## 22. Smaller divergences from lib60870, not addressed
+## 22. Smaller divergences from lib60870
 
-Found while comparing against the C reference implementation. None is a
-correctness defect on its own; all are places where the two libraries would
-behave differently against a hostile or broken peer.
+Found while comparing against the C reference implementation. Individually
+none is as serious as issues 19-21; together they are the remaining places
+where the two libraries would diverge against a hostile, broken, or merely
+replayed input.
 
-- **An I-frame carrying no ASDU.** lib60870 requires `msgSize >= 7` and closes
-  otherwise. Here the payload fails `UnmarshalBinary`, is logged as
-  `discarding undecodable ASDU`, and the connection continues.
-- **An S-frame in the stopped state.** lib60870 actively closes
-  (*"S message in stopped state -> active close"*). Here it is processed
-  normally.
-- **`ParseCP24Time2a` fills the date from `time.Now()`.** CP24Time2a carries
-  only milliseconds and minutes, so something has to supply the rest, but
-  taking it from the wall clock makes decoding non-deterministic and wrong for
-  a captured or replayed frame.
-- **Year handling in `CP56Time2a`.** `byte(ts.Year() - 2000)` is unguarded, so
-  a year outside 2000-2099 silently encodes as some other year.
+**An I-frame carrying no ASDU.** An I-format APDU is information transfer, so
+one carrying none is malformed at the APCI level, before any question of
+whether the ASDU parses. lib60870 rejects it as *"I msg too small"*
+(`msgSize < 7`: six octets of APCI and at least one of ASDU). Here the empty
+payload reached `UnmarshalBinary`, failed, was logged as `discarding
+undecodable ASDU`, and the connection carried on.
+
+*Implemented*: `connection.run` closes on an I-frame whose ASDU is empty,
+checked before the state and sequence tests, matching lib60870's order.
+
+**An S-frame in the stopped state.** Subclass 5.3 exchanges only U-format
+frames when stopped. lib60870's controlled station closes on an S-frame there
+(*"S message in stopped state -> active close"*); its controlling station only
+validates the sequence number and carries on. This library accepted it in
+both roles.
+
+*Implemented*, with the same asymmetry: `connRole.sFrameWhileStoppedIsFatal`
+returns true for `SrvSession` and false for `Client`. There is one exception
+in both: while a STOPDT confirmation is withheld (issue 20), the
+acknowledgement that releases it *is* an S-frame, so it must be let through --
+lib60870 permits the same in `M_CON_STATE_UNCONFIRMED_STOPPED` (*"only U, S
+frames allowed"*).
+
+That exception also forced a related change. `forceDeactivate` -- the
+redundancy hand-off -- previously confirmed immediately, so a superseded
+connection with I-frames still in flight would have closed on the
+acknowledgement that settled them, killing the warm standby the mechanism
+exists to preserve. It now withholds the confirmation on the same rule as a
+peer-requested STOPDT.
+
+**`ParseCP24Time2a` completed the date from `time.Now()`.** CP24Time2a carries
+milliseconds, seconds and minutes -- no hour and no date -- so the decoder
+invented the rest from the wall clock. The same three octets decoded
+differently depending on when they were read, which is wrong for a captured or
+replayed frame and attributes a frame to the wrong hour when it arrives either
+side of an hour boundary. lib60870 exposes only `getMillisecond` and
+`getMinute`, and never synthesizes a timestamp.
+
+*Implemented*: decoding is now a pure function of the three octets, setting
+only the fields the encoding carries, on the zero date. Completing it belongs
+to the application, which is the only party that knows the hour. This changes
+what callers get in the `Time` field of a CP24-tagged information object.
+
+**Year handling in `CP56Time2a`.** The year field is seven bits holding 0-99,
+so a century is not representable and the value must reduce modulo 100 --
+lib60870's `CP56Time2a_setYear` does exactly `value % 100`. `byte(ts.Year() -
+2000)` did not: before 2000 it went negative and wrapped, from 2100 it
+overflowed the field, and past 2127 it spilled into the reserved bit.
+
+*Implemented*: reduced modulo 100 and masked to the field. `ParseCP56Time2a`
+continues to read the result back as 20xx, which is the convention this
+encoding carries.
