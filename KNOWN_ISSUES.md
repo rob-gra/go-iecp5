@@ -21,6 +21,7 @@ fix.
 - [x] [A client's activation timer outlives the connection that started it](#14-a-clients-activation-timer-outlives-the-connection-that-started-it) — implemented: `connRole.roleCleanUp`
 - [x] [Recovering a panicking handler erased the failure](#15-recovering-a-panicking-handler-erased-the-failure) — implemented: named returns on both `dispatchASDU`
 - [x] [`Start` could not report a duplicate start, and lost the monotonic clock](#15b-start-could-not-report-a-duplicate-start-and-activation-timers-lost-the-monotonic-clock) — implemented: `ErrAlreadyStarted`, `atomic.Pointer[time.Time]`
+- [x] [`Server.Send` accepted an ASDU too long to frame](#16-serversend-accepted-an-asdu-too-long-to-frame) — implemented: same length check as `connection.Send`
 
 ---
 
@@ -444,3 +445,37 @@ monotonic reading and stays typed — the reason the original avoided
 indistinguishable from "not waiting". Covered by
 `TestClient_StartTwiceReportsAlreadyStarted` and
 `TestClient_CloseImmediatelyAfterStart`.
+
+---
+
+## 16. `Server.Send` accepted an ASDU too long to frame
+
+**Summary**: `connection.Send` rejects an ASDU whose marshalled form exceeds
+`asdu.ASDUSizeMax`, deliberately and with a comment saying why: past that
+point it is bytes on a queue, and the only thing left to do with one too long
+to frame is drop it. `Server.Send` — the broadcast path — marshalled and
+enqueued without the check.
+
+```go
+func (sf *Server) Send(a *asdu.ASDU) error {
+	data, err := a.MarshalBinary()   // no length check follows
+	...
+	for _, q := range sf.groupQueues { q.Push(data) }
+```
+
+`MarshalBinary` does not bound the total either; it validates the identifier
+fields and allocates whatever the information object needs.
+
+**Impact**: The caller is told `nil` for a message that can never be
+delivered. A copy is queued to every redundancy group and every ungrouped
+session, where it occupies a slot until it reaches the front and
+`sendIFrame` fails to frame it — logged, then discarded. Because the queues
+evict oldest-first, an over-long ASDU can displace data that would otherwise
+have been sent. The two send paths disagreed on the same input: with a
+connected session, `Server.Send` returned `nil` and queued it while
+`SrvSession.Send` returned `asdu: asdu filed length large than max 249`.
+
+**Status: implemented.** `Server.Send` performs the same check, immediately
+after marshalling, and returns `asdu.ErrLengthOutOfRange`. Covered by
+`TestServer_SendRejectsOverlongASDU`, which asserts both the error and that
+the group queue did not grow.
