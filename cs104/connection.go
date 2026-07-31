@@ -6,14 +6,16 @@ package cs104
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // connRole supplies the parts of a cs104 connection that genuinely differ
@@ -101,7 +103,10 @@ type connection struct {
 	// queue twice.
 	deactivateCh chan struct{}
 
-	clog.Clog
+	// log receives this connection's records. Server gives each session a
+	// logger carrying the peer's address, so a line can be attributed to the
+	// connection that produced it; see Server.newSession.
+	log *slog.Logger
 
 	wg     sync.WaitGroup
 	ctx    context.Context
@@ -114,6 +119,15 @@ func (sf *connection) IsConnected() bool { return sf.connectStatus() == connecte
 // IsActive reports whether the STARTDT handshake has completed and no
 // STOPDT has been sent or received since.
 func (sf *connection) IsActive() bool { return sf.isActive.Load() }
+
+// debugEnabled reports whether debug records are actually being emitted.
+// The per-frame call sites check it before building their attributes: slog
+// boxes a call's arguments into []any before the handler can discard them,
+// so an unguarded Debug on the frame path allocates on every frame even
+// with debug off.
+func (sf *connection) debugEnabled() bool {
+	return sf.log.Enabled(context.Background(), slog.LevelDebug)
+}
 
 // Params returns the ASDU parameters this connection encodes and decodes with.
 func (sf *connection) Params() *asdu.Params { return sf.params }
@@ -180,30 +194,44 @@ func (sf *connection) Send(u *asdu.ASDU) error {
 // eviction if the queue was full.
 func (sf *connection) enqueue(data []byte) {
 	if sf.sendQueue.Push(data) {
-		sf.Warn("send queue full, dropped the oldest unsent message")
+		sf.log.Warn("send queue full, dropped oldest unsent message")
 	}
 }
 
 // recvLoop feeds rcvRaw with frames read off the wire.
 func (sf *connection) recvLoop(conn net.Conn) {
-	sf.Debug("recvLoop started!")
+	sf.log.Debug("recv loop started")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("recvLoop stopped!")
+		sf.log.Debug("recv loop stopped")
 	}()
 
 	for {
 		apdu, err := ReadAPDU(conn)
 		if err != nil {
-			if err == io.EOF {
-				sf.Error("remote connect closed, %v", err)
-			} else {
-				sf.Error("receive failed, %v", err)
+			// Neither of the first two cases is a fault, and now that
+			// records are visible by default, logging them as one would
+			// report every routine disconnect as an error.
+			//
+			// A peer hanging up (EOF) is how connections normally end. And
+			// run's defer closes conn to stop this loop, so net.ErrClosed
+			// here is our own teardown arriving as a read failure -- always
+			// self-inflicted, since it is only returned for a descriptor
+			// this side closed. Anything else genuinely failed.
+			switch {
+			case errors.Is(err, io.EOF):
+				sf.log.Info("remote closed the connection")
+			case errors.Is(err, net.ErrClosed):
+				sf.log.Debug("read stopped: connection closed locally")
+			default:
+				sf.log.Error("receive failed", "err", err)
 			}
 			return
 		}
-		sf.Debug("RX Raw[% x]", apdu)
+		if sf.debugEnabled() {
+			sf.log.Debug("rx raw", "apdu", fmt.Sprintf("% x", apdu))
+		}
 		select {
 		case sf.rcvRaw <- apdu:
 		case <-sf.ctx.Done():
@@ -214,11 +242,11 @@ func (sf *connection) recvLoop(conn net.Conn) {
 
 // sendLoop drains sendRaw onto the wire.
 func (sf *connection) sendLoop(conn net.Conn) {
-	sf.Debug("sendLoop started!")
+	sf.log.Debug("send loop started")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("sendLoop stopped!")
+		sf.log.Debug("send loop stopped")
 	}()
 
 	for {
@@ -226,7 +254,9 @@ func (sf *connection) sendLoop(conn net.Conn) {
 		case <-sf.ctx.Done():
 			return
 		case apdu := <-sf.sendRaw:
-			sf.Debug("TX Raw[% x]", apdu)
+			if sf.debugEnabled() {
+				sf.log.Debug("tx raw", "apdu", fmt.Sprintf("% x", apdu))
+			}
 			// Bound how long one frame may take to reach the peer. Without
 			// a deadline, a peer that stops reading blocks Write forever:
 			// sendRaw fills, and run() -- the one that would notice via t1
@@ -235,7 +265,7 @@ func (sf *connection) sendLoop(conn net.Conn) {
 			// peer, so it is the right bound here too. A missed deadline
 			// surfaces as a write error below and ends the connection.
 			if err := conn.SetWriteDeadline(time.Now().Add(sf.config.SendUnAckTimeout1)); err != nil {
-				sf.Error("set write deadline failed, %v", err)
+				sf.log.Error("set write deadline failed", "err", err)
 				return
 			}
 			// Any write failure ends the connection. This is a stateful
@@ -250,7 +280,7 @@ func (sf *connection) sendLoop(conn net.Conn) {
 			for wrCnt := 0; len(apdu) > wrCnt; {
 				byteCount, err := conn.Write(apdu[wrCnt:])
 				if err != nil {
-					sf.Error("sendRaw failed, %v", err)
+					sf.log.Error("frame write failed", "err", err)
 					return
 				}
 				wrCnt += byteCount
@@ -261,10 +291,10 @@ func (sf *connection) sendLoop(conn net.Conn) {
 
 // handlerLoop decodes received ASDUs and hands them to the application.
 func (sf *connection) handlerLoop() {
-	sf.Debug("handlerLoop started")
+	sf.log.Debug("handler loop started")
 	defer func() {
 		sf.wg.Done()
-		sf.Debug("handlerLoop stopped")
+		sf.log.Debug("handler loop stopped")
 	}()
 
 	for {
@@ -274,11 +304,11 @@ func (sf *connection) handlerLoop() {
 		case rawAsdu := <-sf.rcvASDU:
 			asduPack := asdu.NewEmptyASDU(sf.params)
 			if err := asduPack.UnmarshalBinary(rawAsdu); err != nil {
-				sf.Warn("asdu UnmarshalBinary failed, %v", err)
+				sf.log.Warn("discarding undecodable ASDU", "err", err)
 				continue
 			}
 			if err := sf.role.dispatchASDU(asduPack); err != nil {
-				sf.Warn("failed handling I frame, error: %v", err)
+				sf.log.Warn("handling I-frame failed", "err", err)
 			}
 		}
 	}
@@ -319,23 +349,29 @@ func (sf *connection) trySendFrame(apdu []byte) {
 	select {
 	case sf.sendRaw <- apdu:
 	default:
-		sf.Warn("send buffer full, dropped an outbound frame: peer is not reading")
+		sf.log.Warn("send buffer full, dropped an outbound frame: peer is not reading")
 	}
 }
 
 func (sf *connection) sendSFrame(rcvSN uint16) {
-	sf.Debug("TX sFrame %v", sAPCI{rcvSN})
+	if sf.debugEnabled() {
+		sf.log.Debug("tx S-frame", "rcvSN", rcvSN)
+	}
 	sf.sendFrame(newSFrame(rcvSN))
 }
 
 func (sf *connection) sendUFrame(which byte) {
-	sf.Debug("TX uFrame %v", uAPCI{which})
+	if sf.debugEnabled() {
+		sf.log.Debug("tx U-frame", "function", uAPCI{which})
+	}
 	sf.sendFrame(newUFrame(which))
 }
 
 // trySendUFrame is sendUFrame for callers outside run's goroutine.
 func (sf *connection) trySendUFrame(which byte) {
-	sf.Debug("TX uFrame %v", uAPCI{which})
+	if sf.debugEnabled() {
+		sf.log.Debug("tx U-frame", "function", uAPCI{which})
+	}
 	sf.trySendFrame(newUFrame(which))
 }
 
@@ -349,14 +385,16 @@ func (sf *connection) sendIFrame(asdu1 []byte) {
 		// message that vanishes with no trace is the worst thing to have
 		// to diagnose from the far end of a link. Nothing has been
 		// committed yet: the sequence number is still unspent.
-		sf.Error("dropping outbound ASDU: %v", err)
+		sf.log.Error("dropping outbound ASDU", "err", err)
 		return
 	}
 	sf.ackNoRcv = sf.seqNoRcv
 	sf.seqNoSend = nextSeqNo(seqNo)
 	sf.pending = append(sf.pending, seqPending{seqNo, time.Now()})
 
-	sf.Debug("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
+	if sf.debugEnabled() {
+		sf.log.Debug("tx I-frame", "sendSN", seqNo, "rcvSN", sf.seqNoRcv)
+	}
 	sf.sendFrame(iframe)
 }
 
@@ -407,7 +445,7 @@ func drain[T any](ch chan T) {
 // t1/t2/t3 timers and the I/S/U frame exchange, delegating to the connRole
 // wherever the two ends of the link differ.
 func (sf *connection) run(ctx context.Context, conn net.Conn) {
-	sf.Debug("run started!")
+	sf.log.Debug("connection state machine started")
 	sf.cleanUp()
 	sf.setConn(conn)
 
@@ -432,7 +470,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		sf.wg.Wait()
 		sf.role.notifyDown()
-		sf.Debug("run stopped!")
+		sf.log.Debug("connection state machine stopped")
 	}()
 	sf.role.notifyUp()
 
@@ -442,7 +480,11 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 	sf.idleSince = time.Now()
 
 	for {
-		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
+		// Strictly less than k: seqNoCount is the number of I-frames already
+		// outstanding, and sendIFrame below adds one more. Allowing the send
+		// at == k would leave k+1 unacknowledged, one past what subclass 5.5
+		// permits -- enough for a peer that enforces k to drop the link.
+		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) < sf.config.SendUnAckLimitK {
 			if o, ok := sf.sendQueue.Pop(); ok {
 				sf.sendIFrame(o) // pushes back t3 via sendFrame
 				continue
@@ -458,7 +500,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// fall back to inactive, same as processing a STOPDT, but stay
 			// connected as a standby so we can be reactivated later without
 			// the peer having to reconnect.
-			sf.Debug("deactivating: superseded by another connection in the redundancy group")
+			sf.log.Info("deactivating: superseded by another connection in the redundancy group")
 			sf.sendUFrame(uStopDtConfirm)
 			sf.isActive.Store(false)
 
@@ -470,7 +512,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// STARTDT/STOPDT) was never confirmed.
 			if !sf.testFrAliveSendSince.IsZero() &&
 				now.Sub(sf.testFrAliveSendSince) >= sf.config.SendUnAckTimeout1 {
-				sf.Error("test frame alive confirm timeout t₁")
+				sf.log.Error("no TESTFR confirmation within t₁, closing", "t1", sf.config.SendUnAckTimeout1)
 				return
 			}
 			if sf.role.roleTimedOut(now) {
@@ -482,7 +524,8 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// two differ -- which is what makes pending[0] safe here.
 			if sf.ackNoSend != sf.seqNoSend &&
 				now.Sub(sf.pending[0].sendTime) >= sf.config.SendUnAckTimeout1 {
-				sf.Error("fatal transmission timeout t₁")
+				sf.log.Error("no acknowledgement within t₁, closing",
+					"t1", sf.config.SendUnAckTimeout1, "unacked", seqNoCount(sf.ackNoSend, sf.seqNoSend))
 				return
 			}
 
@@ -507,20 +550,27 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:
-				sf.Debug("RX sFrame %v", head)
+				if sf.debugEnabled() {
+					sf.log.Debug("rx S-frame", "rcvSN", head.rcvSN)
+				}
 				if !sf.updateAckNoOut(head.rcvSN) {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					sf.log.Error("acknowledgement outside the outstanding window, closing",
+						"rcvSN", head.rcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
 					return
 				}
 
 			case iAPCI:
-				sf.Debug("RX iFrame %v", head)
+				if sf.debugEnabled() {
+					sf.log.Debug("rx I-frame", "sendSN", head.sendSN, "rcvSN", head.rcvSN)
+				}
 				if !sf.IsActive() {
-					sf.Warn("station not active")
+					sf.log.Warn("discarding I-frame: data transfer is stopped")
 					break // discard: data transfer is stopped
 				}
 				if !sf.updateAckNoOut(head.rcvSN) || head.sendSN != sf.seqNoRcv {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					sf.log.Error("I-frame sequence out of step, closing",
+						"sendSN", head.sendSN, "wantSendSN", sf.seqNoRcv,
+						"rcvSN", head.rcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
 					return
 				}
 
@@ -540,7 +590,9 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 				}
 
 			case uAPCI:
-				sf.Debug("RX uFrame %v", head)
+				if sf.debugEnabled() {
+					sf.log.Debug("rx U-frame", "function", head)
+				}
 				sf.role.handleUFrame(head.function)
 			}
 		}

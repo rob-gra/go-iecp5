@@ -14,6 +14,10 @@ fix.
 - [~] [Security/authentication ASDU types (S_xx) are declared but entirely unimplemented](#7-securityauthentication-asdu-types-s_xx-are-declared-but-entirely-unimplemented) — not planned, deemed irrelevant
 - [~] [No threadless/tick-driven mode for embedded or single-threaded use](#8-no-threadlesstick-driven-mode-for-embedded-or-single-threaded-use) — not planned, deemed irrelevant
 - [~] [No raw-message observation hook for applications](#9-no-raw-message-observation-hook-for-applications) — not planned, deemed irrelevant
+- [x] [Send window allowed k+1 unacknowledged I-frames instead of k](#10-send-window-allowed-k1-unacknowledged-i-frames-instead-of-k) — fixed in `connection.run`
+- [x] [`Config.Valid` did not enforce the cross-field constraints it documents](#11-configvalid-did-not-enforce-the-cross-field-constraints-it-documents) — implemented: `w <= 2/3 k` and `t₂ < t₁`
+- [x] [Invalid config/params were replaced with defaults silently](#12-invalid-configparams-were-replaced-with-defaults-silently) — implemented: warnings on `Server` and `ClientOption`
+- [x] [Logging is disabled by default, so every warning and error is silent](#13-logging-is-disabled-by-default-so-every-warning-and-error-is-silent) — resolved by moving to `log/slog`
 
 ---
 
@@ -46,7 +50,7 @@ There is no real message queue behind this: the channel's capacity is a fixed mu
 
 **Suggested fix**: Introduce an actual bounded queue (e.g. a ring buffer that evicts the oldest entry when full instead of rejecting the newest, or a persistent/replayable queue) between `Send()` and the low-level `sendRaw` transmission, so callers don't need to hand-roll retry/backoff logic around `ErrBufferFulled`, and so data isn't lost purely because of a transient burst or reconnect.
 
-**Status: implemented.** `Client` and `SrvSession` now queue outbound ASDUs in a `messageQueue` (`cs104/queue.go`): a mutex-protected, bounded FIFO that evicts the oldest entry on overflow instead of rejecting the newest (`Send()` no longer returns `ErrBufferFulled`; it logs a warning via the existing `clog` debug logging when an eviction happens). Unlike the old channel, `cleanUp()` no longer drains it, so a message queued but not yet transmitted survives a `Client`/`ServerSpecial` reconnect. On the `Server` side, the connections in a redundancy group share one queue (`Server.queueFor`), so a connection superseded by failover doesn't lose whatever it hadn't sent yet -- the connection replacing it simply continues draining the same queue. `ErrBufferFulled` has been removed: nothing produced it any more.
+**Status: implemented.** `Client` and `SrvSession` now queue outbound ASDUs in a `messageQueue` (`cs104/queue.go`): a mutex-protected, bounded FIFO that evicts the oldest entry on overflow instead of rejecting the newest (`Send()` no longer returns `ErrBufferFulled`; it logs a warning when an eviction happens). Unlike the old channel, `cleanUp()` no longer drains it, so a message queued but not yet transmitted survives a `Client`/`ServerSpecial` reconnect. On the `Server` side, the connections in a redundancy group share one queue (`Server.queueFor`), so a connection superseded by failover doesn't lose whatever it hadn't sent yet -- the connection replacing it simply continues draining the same queue. `ErrBufferFulled` has been removed: nothing produced it any more.
 
 ---
 
@@ -208,4 +212,151 @@ The `F_FR_NA_1` … `F_SC_NB_1` type-ID constants exist in `identifier.go` (so p
 
 **Suggested fix**: Add an optional callback (e.g. `SetRawMessageHandler(func(conn asdu.Connect, data []byte, isSend bool))`) invoked alongside the existing debug logging in `recvLoop`/`sendLoop`, so applications can tap raw traffic without scraping logs.
 
-**Status: not planned.** Deemed irrelevant to current priorities.
+**Status: not planned.** Deemed irrelevant to current priorities. Note that
+the premise has shifted since this was written: the frame trace now goes
+through `log/slog` (issue 13), so an application can capture raw traffic by
+installing its own `slog.Handler` and matching on the `rx raw`/`tx raw`
+records, without a dedicated hook or any log-scraping.
+
+---
+
+## 10. Send window allowed k+1 unacknowledged I-frames instead of k
+
+**Summary**: `connection.run`'s send gate compared the number of *already
+outstanding* I-frames against `k` with `<=`, then sent one more on top of it:
+
+```go
+// cs104/connection.go
+if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
+    if o, ok := sf.sendQueue.Pop(); ok {
+        sf.sendIFrame(o) // seqNoSend++, so the count becomes k+1
+        continue
+    }
+}
+```
+
+With `k=3` the connection emitted 4 unacknowledged I-frames before stopping.
+
+**Impact**: IEC 60870-5-104 subclass 5.5 caps the difference between the send
+state variable and the acknowledged sequence number at `k`. A peer that
+enforces `k` — lib60870 does — sees the (k+1)th I-frame as a protocol
+violation and drops the connection. Against a lenient peer nothing visibly
+breaks, which is why this survived: it only manifests against a strict
+implementation, and then only under enough load to fill the window.
+
+**Status: fixed.** The comparison is now `<` against the outstanding count, so
+at most `k` I-frames are ever unacknowledged. Covered by
+`TestConnection_KWindowStopsAtK`, which counts the I-frames emitted with no
+acknowledgement and fails at `k+1`.
+
+---
+
+## 11. `Config.Valid` did not enforce the cross-field constraints it documents
+
+**Summary**: `Config`'s own field comments state two relationships — `w` must
+not exceed 2/3 `k` ("w不超过2/3k"), and `t₂` must be less than `t₁` ("必须小于
+t₁") — but `Valid()` only range-checked each field independently. A config
+with `t₂=20s, t₁=15s`, or with `w=k`, was accepted.
+
+**Impact**: Both misconfigurations fail in ways that point away from their
+cause. `t₂ >= t₁` means this end acknowledges received frames only after the
+peer has already given up waiting and dropped the link, so a quiet connection
+cycles on a timer with no error attributable to configuration. `w` close to
+`k` stalls the sender waiting for an acknowledgement the receiver is not yet
+obliged to send, so throughput collapses to whatever `t₂` paces and the link
+looks slow rather than misconfigured.
+
+**Status: implemented.** `Valid()` now rejects both. Additionally, an
+unspecified `w` defaults to `2/3 k` rather than to a fixed 8, so lowering `k`
+alone still yields a valid pair; at the default `k=12` this is 8, unchanged.
+Covered by `cs104/config_test.go`.
+
+---
+
+## 12. Invalid config/params were replaced with defaults silently
+
+**Summary**: `Server.SetConfig`/`SetParams` and
+`ClientOption.SetConfig`/`SetParams` discarded a rejected value and
+substituted `DefaultConfig()`/`asdu.ParamsWide` with no output, so a caller
+could not tell their settings had not been applied.
+
+**Impact**: The caller runs with timing parameters they did not choose. In a
+SCADA deployment the symptom is connection cycling or throughput loss that
+looks like a network fault, and the configuration is the last place anyone
+looks because it appears to have been accepted.
+
+**Status: implemented.** All four call sites now emit a warning naming the
+validation error and the fallback. `ClientOption` has no logger of its own, so
+it records the message and `NewClient`/`NewServerSpecial` emit it once a
+logger exists. Note this is only visible if the application has enabled
+logging — see issue 13.
+
+---
+
+## 13. Logging is disabled by default, so every warning and error is silent
+
+**Summary**: `clog.NewLogger` returns a `Clog` with its output flag clear, and
+every level checks that flag:
+
+```go
+// clog/clog.go
+func NewLogger(prefix string) Clog {
+    return Clog{defaultLogger{log.New(os.Stdout, prefix, log.LstdFlags)}, 0}
+}                                                                     // ^ off
+
+func (sf Clog) Warn(format string, v ...interface{}) {
+    if atomic.LoadUint32(&sf.has) == 1 { // never true until LogMode(true)
+        sf.provider.Warn(format, v...)
+    }
+}
+```
+
+Nothing in the library enables it, so unless the application calls
+`LogMode(true)` the entire package is silent.
+
+**Impact**: This is not only about debug tracing. `Critical`, `Error` and
+`Warn` are gated by the same flag, so by default a deployment gets no output
+for `fatal transmission timeout t₁`, `remote connect closed`, `send queue
+full, dropped the oldest unsent message`, a panicking application handler
+caught by `dispatchASDU`'s `recover`, or a rejected configuration (issue 12).
+An operator sees connections dropping and data missing with nothing in the
+logs to explain either. `LogMode` is also not documented as something a
+production deployment must call.
+
+**Suggested fix**: Separate severity from verbosity — have `LogMode` gate
+`Debug` only (the per-frame `RX Raw`/`TX Raw` tracing it exists for) and let
+`Warn`/`Error`/`Critical` always reach the provider. Applications that want
+true silence can install a no-op `LogProvider` via `SetLogProvider`. This is a
+behavior change for existing callers, who would begin seeing warnings and
+errors they currently do not, which is the point; it should be a deliberate
+decision rather than a drive-by fix.
+
+**Status: resolved, by replacing `clog` with `log/slog` rather than by the
+fix suggested above.** The `clog` package is deleted. Records now go to
+`slog.Default()` when nothing is configured, so the "off until `LogMode(true)`"
+gate no longer exists — the defect disappears rather than being patched.
+`LogMode(bool)` and `SetLogProvider(clog.LogProvider)` are replaced by
+`SetLogger(*slog.Logger)` on `Server`, `Client` and `ClientOption`, and on the
+`ServerSpecial` interface. Silencing the library is now explicit: pass a
+logger whose handler discards.
+
+Two things came out of the migration beyond the swap itself:
+
+- **Per-connection attribution.** `Server.newSession` derives each session's
+  logger with the peer address attached, so every record names the connection
+  that produced it. Previously all sessions shared one static prefix and a
+  line like `fatal transmission timeout t₁` could not be tied to a
+  connection — the practical reason this migration was worth doing on a
+  multi-master server.
+- **Levels revisited, now that records are visible.** Routine lifecycle events
+  that were logged as errors would, under the new default, report every clean
+  shutdown as a fault: a peer hanging up (`io.EOF`), this side closing the
+  socket during teardown (`net.ErrClosed` from `recvLoop`), and `Accept`
+  failing because `Close` closed the listener. Each is now reported at the
+  level it deserves.
+
+The per-frame trace sites (`rx raw`, `tx raw`, the I/S/U frame records) are
+guarded by `connection.debugEnabled`. slog boxes a call's arguments into
+`[]any` before the handler can discard them, so an unguarded `Debug` on the
+frame path allocates on every frame even with debug off: measured at 2
+allocs/94ns per call unguarded versus 0 allocs/5.9ns guarded.

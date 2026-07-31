@@ -17,13 +17,50 @@ The current implementation contains code for IEC 60870-5-104 (protocool over TCP
 
 
 asdu package: [![GoDoc](https://godoc.org/github.com/thinkgos/go-iecp5/asdu?status.svg)](https://godoc.org/github.com/thinkgos/go-iecp5/asdu)  
-clog package: [![GoDoc](https://godoc.org/github.com/thinkgos/go-iecp5/clog?status.svg)](https://godoc.org/github.com/thinkgos/go-iecp5/clog)  
 cs104 package: [![GoDoc](https://godoc.org/github.com/thinkgos/go-iecp5/cs104?status.svg)](https://godoc.org/github.com/thinkgos/go-iecp5/cs104)  
 
 ## Feature:
 
 - client/server for CS 104 TCP/IP communication
 - support for much application layer(except file object) message types,
+
+## Logging
+
+The library logs through `log/slog`. With no setup it writes to
+`slog.Default()`, so warnings and errors — a dropped connection, a t₁
+timeout, a rejected configuration — are visible without opting in:
+
+```go
+srv := cs104.NewServer(&handler{}) // logs to slog.Default()
+```
+
+Pass your own logger to route records anywhere slog can go, and to control
+the level. The per-frame protocol trace is at `Debug`; everything a running
+system normally needs is `Info` and above:
+
+```go
+srv.SetLogger(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug, // include the RX/TX frame trace
+})))
+```
+
+`Client` and `ClientOption` (for `ServerSpecial`) take the same `SetLogger`.
+To silence the library, give it a logger whose handler discards — passing
+`nil` restores `slog.Default()` rather than disabling output.
+
+Server records carry the connection they came from, so sessions stay
+distinguishable when several masters are connected:
+
+```
+level=ERROR msg="no acknowledgement within t₁, closing" component=cs104.server remote=10.0.0.7:41230 t1=15s unacked=12
+```
+
+### Migrating from `clog`
+
+The `clog` package is gone. `LogMode(bool)` and
+`SetLogProvider(clog.LogProvider)` are replaced by `SetLogger(*slog.Logger)`.
+`LogMode(true)` has no direct equivalent because output is no longer off by
+default; to get the old full trace, set a `Debug`-level handler as above.
 
 ## Examples
 

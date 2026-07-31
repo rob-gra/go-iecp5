@@ -6,6 +6,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 	"runtime"
 	"time"
 
@@ -32,7 +34,9 @@ func main() {
 	//   srv.SetCommonAddrFilter(func(ca asdu.CommonAddr) bool { return ca == myStationCA })
 	srv.AllowCommonAddrs(1)
 
-	srv.LogMode(true)
+	// Records go to slog.Default() (info and above) with no setup at all.
+	// Set a debug-level logger to also see the per-frame protocol trace.
+	srv.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	// Server itself implements asdu.Connect, broadcasting to every
 	// currently connected master.

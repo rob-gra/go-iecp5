@@ -12,6 +12,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 	"runtime"
 	"time"
 
@@ -44,7 +46,9 @@ func main() {
 		// fires for a connection that actually dropped.
 		log.Println("master disconnected")
 	})
-	srv.LogMode(true)
+	// Records go to slog.Default() (info and above) with no setup at all.
+	// Set a debug-level logger to also see the per-frame protocol trace.
+	srv.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	// Server itself implements asdu.Connect, broadcasting to every
 	// currently connected master (active or standby).

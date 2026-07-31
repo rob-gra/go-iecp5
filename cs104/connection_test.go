@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // TestConnection_T2_AcknowledgesBeforeW covers t₂: a peer that stops
@@ -99,7 +98,7 @@ func buildTestMonitorASDU(t *testing.T) []byte {
 func TestConnection_TrySendFrame_DoesNotBlockWhenBufferFull(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 2),
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	done := make(chan struct{})
@@ -133,7 +132,7 @@ func TestConnection_SendFrame_UnblocksOnTeardown(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 1),
 		ctx:     ctx,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 	sf.sendRaw <- []byte{0} // buffer now full; nothing drains it
 
@@ -174,7 +173,7 @@ func TestConnection_SendLoop_WriteDeadlineEndsStalledWrite(t *testing.T) {
 		sendRaw: make(chan []byte, 4),
 		ctx:     ctx,
 		cancel:  cancel,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	// net.Pipe is unbuffered, so this write blocks until the peer reads --
@@ -214,7 +213,7 @@ func TestConnection_OutboundFrameDefersT3(t *testing.T) {
 	sf := &connection{
 		sendRaw: make(chan []byte, 4),
 		ctx:     ctx,
-		Clog:    clog.NewLogger("test cs104 => "),
+		log:     discardLogger(),
 	}
 
 	sf.idleSince = time.Now().Add(-time.Hour) // long idle
@@ -248,7 +247,7 @@ func TestConnection_CloseDoesNotFreeBlockedRecvLoop(t *testing.T) {
 		rcvRaw: make(chan []byte, 1), // fills immediately, nothing drains it
 		ctx:    ctx,
 		cancel: cancel,
-		Clog:   clog.NewLogger("test cs104 => "),
+		log:    discardLogger(),
 	}
 	sf.wg.Add(1)
 	stopped := make(chan struct{})
@@ -309,4 +308,64 @@ func TestConnection_SendRejectsOverlongASDU(t *testing.T) {
 	if !c.IsConnected() || !c.IsActive() {
 		t.Fatal("rejecting an over-long ASDU should leave the connection untouched")
 	}
+}
+
+// TestConnection_KWindowStopsAtK covers the k send window: with k
+// unacknowledged I-frames outstanding, transmission must stop until the peer
+// acknowledges (IEC 60870-5-104, subclass 5.5).
+//
+// The bound used to be "<= k" against the count of frames already
+// outstanding, which permitted one more send on top of it and left k+1
+// unacknowledged -- one past what the standard allows, and enough for a peer
+// enforcing k to tear the link down.
+func TestConnection_KWindowStopsAtK(t *testing.T) {
+	cfg := fastTestConfig()
+	cfg.SendUnAckLimitK = 3
+	// Nothing may time out mid-test: the subject here is the window, not the
+	// timers, and a t₁ teardown would end the connection before the count is
+	// meaningful.
+	cfg.SendUnAckTimeout1 = 10 * time.Second
+	cfg.RecvUnAckTimeout2 = 5 * time.Second
+	cfg.IdleTimeout3 = 20 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+
+	writeFrame(t, peer, newUFrame(uStartDtActive))
+	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+		t.Fatal("expected StartDtConfirm")
+	}
+
+	// Queue well past the window, and never acknowledge any of it.
+	payload := buildTestMonitorASDU(t)
+	for i := 0; i < int(cfg.SendUnAckLimitK)*3; i++ {
+		sess.enqueue(payload)
+	}
+
+	// Count the I-frames that arrive before the session goes quiet.
+	iFrames := 0
+	for {
+		_ = peer.SetReadDeadline(time.Now().Add(timeoutResolution * 3))
+		head := make([]byte, 2)
+		if _, err := peer.Read(head); err != nil {
+			break // gone quiet: the window is closed
+		}
+		body := make([]byte, head[1])
+		if _, err := peer.Read(body); err != nil {
+			break
+		}
+		if _, ok := mustParse(append(head, body...)).(iAPCI); ok {
+			iFrames++
+		}
+	}
+
+	if iFrames != int(cfg.SendUnAckLimitK) {
+		t.Fatalf("sent %d unacknowledged I-frames, want exactly k=%d",
+			iFrames, cfg.SendUnAckLimitK)
+	}
+}
+
+// mustParse is parse for tests that have already read a whole frame.
+func mustParse(frame []byte) any {
+	apci, _ := parse(frame)
+	return apci
 }

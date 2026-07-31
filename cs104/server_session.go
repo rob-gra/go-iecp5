@@ -5,6 +5,7 @@
 package cs104
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -60,7 +61,7 @@ func (sf *SrvSession) handleUFrame(function byte) {
 	case uTestFrConfirm:
 		sf.testFrAliveSendSince = time.Time{}
 	default:
-		sf.Error("illegal U-Frame functions[0x%02x] ignored", function)
+		sf.log.Error("ignoring illegal U-frame function", "function", fmt.Sprintf("0x%02x", function))
 	}
 }
 
@@ -107,11 +108,13 @@ func (sf *SrvSession) commonAddrAllowed(ca asdu.CommonAddr) bool {
 func (sf *SrvSession) dispatchASDU(asduPack *asdu.ASDU) error {
 	defer func() {
 		if err := recover(); err != nil {
-			sf.Critical("server handler %+v", err)
+			sf.log.Error("server handler panicked", "panic", err, "type", asduPack.Identifier.Type)
 		}
 	}()
 
-	sf.Debug("ASDU %+v", asduPack)
+	if sf.debugEnabled() {
+		sf.log.Debug("dispatching ASDU", "asdu", asduPack.String())
+	}
 
 	if !sf.commonAddrAllowed(asduPack.CommonAddr) {
 		return asduPack.SendReplyMirror(sf, asdu.UnknownCA)

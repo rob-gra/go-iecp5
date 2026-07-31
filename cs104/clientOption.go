@@ -6,6 +6,8 @@ package cs104
 
 import (
 	"crypto/tls"
+	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -22,6 +24,16 @@ type ClientOption struct {
 	reconnectInterval time.Duration // 重连间隔时间
 	TLSConfig         *tls.Config   // tls配置
 	commonAddrFilter  func(asdu.CommonAddr) bool
+	// rejected records settings SetConfig/SetParams refused and replaced
+	// with defaults. A ClientOption has no logger of its own, so the
+	// warnings are held here and emitted by NewClient/NewServerSpecial,
+	// which do -- otherwise a rejected configuration is indistinguishable
+	// from an accepted one, and the resulting behavior (connection cycling,
+	// throughput collapse) gives no hint of its cause.
+	rejected []string
+	// log, when set, is the base logger NewClient/NewServerSpecial derive
+	// from. Nil means slog.Default(). See SetLogger.
+	log *slog.Logger
 }
 
 // NewOption with default config and default asdu.ParamsWide params
@@ -40,6 +52,8 @@ func NewOption() *ClientOption {
 // SetConfig set config if config is valid it will use DefaultConfig()
 func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 	if err := cfg.Valid(); err != nil {
+		sf.rejected = append(sf.rejected,
+			fmt.Sprintf("rejected config, falling back to DefaultConfig(): %v", err))
 		sf.config = DefaultConfig()
 	} else {
 		sf.config = cfg
@@ -50,11 +64,39 @@ func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 // SetParams set asdu params if params is valid it will use asdu.ParamsWide
 func (sf *ClientOption) SetParams(p *asdu.Params) *ClientOption {
 	if err := p.Valid(); err != nil {
+		sf.rejected = append(sf.rejected,
+			fmt.Sprintf("rejected asdu params, falling back to asdu.ParamsWide: %v", err))
 		sf.params = *asdu.ParamsWide
 	} else {
 		sf.params = *p
 	}
 	return sf
+}
+
+// SetLogger directs the records of the Client or ServerSpecial built from
+// this option to l. Records go to slog.Default() when unset. Passing nil
+// restores that default rather than disabling logging -- to silence the
+// library, give it a logger whose handler discards everything.
+func (sf *ClientOption) SetLogger(l *slog.Logger) *ClientOption {
+	sf.log = l
+	return sf
+}
+
+// logger returns the base logger for this option, defaulting to
+// slog.Default() so a zero-valued or hand-built ClientOption still logs.
+func (sf *ClientOption) logger() *slog.Logger {
+	if sf.log == nil {
+		return slog.Default()
+	}
+	return sf.log
+}
+
+// logRejected reports anything SetConfig/SetParams replaced with defaults,
+// once a logger exists to report it to.
+func (sf *ClientOption) logRejected(log *slog.Logger) {
+	for _, msg := range sf.rejected {
+		log.Warn(msg)
+	}
 }
 
 // SetReconnectInterval set tcp  reconnect the host interval when connect failed after try

@@ -7,6 +7,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
@@ -28,7 +30,9 @@ func main() {
 	}
 
 	client := cs104.NewClient(&handler{}, option)
-	client.LogMode(true)
+	// Records go to slog.Default() (info and above) with no setup at all.
+	// Set a debug-level logger to also see the per-frame protocol trace.
+	client.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	client.SetOnConnectHandler(func(c *cs104.Client) {
 		log.Println("connected, sending STARTDT")

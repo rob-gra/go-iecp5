@@ -7,11 +7,11 @@ package cs104
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // ServerSpecial server special interface
@@ -26,8 +26,10 @@ type ServerSpecial interface {
 	SetOnConnectHandler(f func(c asdu.Connect))
 	SetConnectionLostHandler(f func(c asdu.Connect))
 
-	LogMode(enable bool)
-	SetLogProvider(p clog.LogProvider)
+	// SetLogger directs this station's records to l, or to slog.Default()
+	// when l is nil. To silence the library, pass a logger whose handler
+	// discards everything.
+	SetLogger(l *slog.Logger)
 }
 
 type serverSpec struct {
@@ -45,7 +47,7 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 				sendQueue: newMessageQueue(1024),
 				rcvRaw:    make(chan []byte, 1024),
 				sendRaw:   make(chan []byte, 1024),
-				Clog:      clog.NewLogger("cs104 serverSpec => "),
+				log:       o.logger().With("component", "cs104.serverSpecial"),
 			},
 			handler:          handler,
 			commonAddrFilter: o.commonAddrFilter,
@@ -57,7 +59,19 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 	s.connection.config = &s.option.config
 	s.connection.params = &s.option.params
 	s.role = &s.SrvSession
+	if o.server != nil {
+		s.log = s.log.With("remote", o.server.Host)
+	}
+	s.option.logRejected(s.log)
 	return s
+}
+
+// SetLogger implements ServerSpecial.
+func (sf *serverSpec) SetLogger(l *slog.Logger) {
+	if l == nil {
+		l = slog.Default()
+	}
+	sf.log = l
 }
 
 // SetOnConnectHandler set on connect handler
@@ -100,19 +114,19 @@ func (sf *serverSpec) running() {
 		default:
 		}
 
-		sf.Debug("connecting server %+v", sf.option.server)
+		sf.log.Debug("connecting")
 		conn, err := openConnection(sf.option.server, sf.option.TLSConfig, sf.config.ConnectTimeout0)
 		if err != nil {
-			sf.Error("connect failed, %v", err)
+			sf.log.Error("connect failed", "err", err)
 			if !sf.option.autoReconnect {
 				return
 			}
 			time.Sleep(sf.option.reconnectInterval)
 			continue
 		}
-		sf.Debug("connect success")
+		sf.log.Info("connected")
 		sf.run(ctx, conn)
-		sf.Debug("disconnected server %+v", sf.option.server)
+		sf.log.Info("disconnected")
 		select {
 		case <-ctx.Done():
 			return

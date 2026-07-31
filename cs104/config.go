@@ -102,16 +102,35 @@ func (sf *Config) Valid() error {
 		return errors.New(`SendUnAckTimeout1 "t₁" not in [1, 255]s`)
 	}
 
+	// "w" defaults to 2/3 "k" rather than to a fixed 8, so that lowering "k"
+	// alone still yields a valid pair. At the default k=12 this is 8, the
+	// value the standard names and the one this defaulted to before.
 	if sf.RecvUnAckLimitW == 0 {
-		sf.RecvUnAckLimitW = 8
+		sf.RecvUnAckLimitW = max(sf.SendUnAckLimitK*2/3, RecvUnAckLimitWMin)
 	} else if sf.RecvUnAckLimitW < RecvUnAckLimitWMin || sf.RecvUnAckLimitW > RecvUnAckLimitWMax {
 		return errors.New(`RecvUnAckLimitW "w" not in [1, 32767]`)
+	} else if sf.RecvUnAckLimitW > sf.SendUnAckLimitK*2/3 {
+		// Subclass 5.5: the receiver must acknowledge at the latest after w
+		// APDUs, and the sender stops after k unacknowledged ones. Letting w
+		// approach (or exceed) k means the sender routinely stalls waiting
+		// for an acknowledgement the receiver is not yet obliged to send, so
+		// throughput collapses to whatever t₂ paces -- a failure that looks
+		// like a slow link rather than a misconfiguration.
+		return errors.New(`RecvUnAckLimitW "w" must not exceed 2/3 of SendUnAckLimitK "k"`)
 	}
 
 	if sf.RecvUnAckTimeout2 == 0 {
 		sf.RecvUnAckTimeout2 = 10 * time.Second
 	} else if sf.RecvUnAckTimeout2 < RecvUnAckTimeout2Min || sf.RecvUnAckTimeout2 > RecvUnAckTimeout2Max {
 		return errors.New(`RecvUnAckTimeout2 "t₂" not in [1, 255]s`)
+	}
+	if sf.RecvUnAckTimeout2 >= sf.SendUnAckTimeout1 {
+		// t₂ is when this end acknowledges received frames; t₁ is when the
+		// peer gives up waiting for that acknowledgement and drops the link.
+		// t₂ >= t₁ means the acknowledgement is always sent too late, so a
+		// quiet link disconnects on a timer instead of staying up -- the
+		// connection cycling is periodic and gives no hint of its cause.
+		return errors.New(`RecvUnAckTimeout2 "t₂" must be less than SendUnAckTimeout1 "t₁"`)
 	}
 
 	if sf.IdleTimeout3 == 0 {

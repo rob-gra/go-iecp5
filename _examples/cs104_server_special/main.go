@@ -7,6 +7,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 	"runtime"
 	"time"
 
@@ -27,7 +29,9 @@ func main() {
 	option.AllowCommonAddrs(1)
 
 	srv := cs104.NewServerSpecial(&handler{}, option)
-	srv.LogMode(true)
+	// Records go to slog.Default() (info and above) with no setup at all.
+	// Set a debug-level logger to also see the per-frame protocol trace.
+	srv.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	srv.SetOnConnectHandler(func(c asdu.Connect) {
 		log.Println("dialed out to master")
