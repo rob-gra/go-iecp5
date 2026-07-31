@@ -76,6 +76,7 @@ func NewServer(handler ServerHandlerInterface) *Server {
 // SetConfig set config if config is valid it will use DefaultConfig()
 func (sf *Server) SetConfig(cfg Config) *Server {
 	if err := cfg.Valid(); err != nil {
+		sf.Warn("invalid config (%v), falling back to DefaultConfig()", err)
 		sf.config = DefaultConfig()
 	} else {
 		sf.config = cfg
@@ -86,6 +87,7 @@ func (sf *Server) SetConfig(cfg Config) *Server {
 // SetParams set asdu params if params is valid it will use asdu.ParamsWide
 func (sf *Server) SetParams(p *asdu.Params) *Server {
 	if err := p.Valid(); err != nil {
+		sf.Warn("invalid asdu params (%v), falling back to asdu.ParamsWide", err)
 		sf.params = *asdu.ParamsWide
 	} else {
 		sf.params = *p
