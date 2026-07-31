@@ -18,19 +18,22 @@
 //
 // # Reading a capture is not the same as reading a connection
 //
-// Two things make a capture harder than the live socket the library normally
-// reads, and both are handled here:
+// A TCP segment is not an APDU. One segment routinely carries several (a
+// frame is at most 255 bytes, and a busy link fills the MSS), one APDU may be
+// split across two, and on a real link segments also arrive out of order and
+// get retransmitted. gopacket's tcpassembly handles all of that: it hands
+// each direction of each connection its in-order byte stream, and this only
+// has to frame APDUs out of it.
 //
-// A TCP segment is not an APDU. One segment routinely carries several APDUs
-// (they are at most 255 bytes, and a busy link fills the MSS), and an APDU
-// may equally be split across two segments. So payload is accumulated per
-// direction of each TCP connection and framed out of that byte stream, not
-// out of individual packets.
+// Doing the buffering by hand instead is both longer and wrong -- appending
+// payload in arrival order loses an APDU whose segments were reordered, and
+// counts a retransmitted one twice.
 //
-// A capture starts wherever the capture started. It may begin mid-frame, and
-// it may be missing segments entirely. cs104.ReadAPDU resynchronizes on the
-// 0x68 start byte for exactly this reason, so a stream that begins in the
-// middle of a frame recovers at the next one rather than being discarded.
+// A capture also starts wherever capture started, and may be missing segments
+// in the middle. tcpassembly reports a gap as Reassembly.Skip, which matters:
+// splicing the bytes on either side of a hole together fabricates a frame
+// that was never on the wire. On a gap the partial frame is dropped and
+// cs104.ReadAPDU resynchronizes on the next 0x68 start byte.
 package main
 
 import (
@@ -50,15 +53,15 @@ import (
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcapgo"
+	"github.com/gopacket/gopacket/tcpassembly"
 	"github.com/thinkgos/go-iecp5/asdu"
 	"github.com/thinkgos/go-iecp5/cs104"
 )
 
-// maxStreamBuffer caps what is held per direction while waiting for the rest
-// of an APDU. A frame is at most 255 bytes, so anything beyond a few of them
-// means the stream is not IEC 104 (or its start was never captured) and the
-// bytes will never resolve. Without the cap, one such flow grows until the
-// process dies.
+// maxStreamBuffer caps what one direction holds while waiting for the rest of
+// an APDU. A frame is at most 255 bytes, so anything beyond a few of them
+// means the stream is not IEC 104 and the bytes will never resolve. Without
+// the cap, one such flow grows until the process dies.
 const maxStreamBuffer = 1 << 16
 
 func main() {
@@ -130,7 +133,6 @@ func main() {
 		timeFmt:     *timeFmt,
 		perIOA:      *perIOA,
 		csv:         w,
-		streams:     make(map[streamKey]*stream),
 	}
 
 	if err := x.run(*inPath); err != nil {
@@ -146,20 +148,60 @@ func main() {
 		x.packets, x.apdus, x.asdus, x.rows, x.filtered, x.undecodable)
 }
 
-// streamKey identifies one direction of one TCP connection. Direction
-// matters: each carries its own independent byte stream and its own frame
-// boundaries, so the two must never share a buffer.
-type streamKey struct {
-	net, transport gopacket.Flow
+// streamFactory hands every direction of every TCP connection its own stream.
+type streamFactory struct{ x *extractor }
+
+func (f *streamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
+	src, dst := net.Endpoints()
+	return &stream{x: f.x, src: src.String(), dst: dst.String()}
 }
 
-// stream holds the not-yet-framed tail of one direction's payload.
+// stream frames APDUs out of one direction's reassembled byte stream. It
+// implements tcpassembly.Stream rather than wrapping tcpreader.ReaderStream,
+// which would be shorter: ReaderStream exposes only an io.Reader, and the
+// per-frame timestamps that become the frame_time column live on the
+// Reassembly values it discards.
 type stream struct {
-	buf []byte
-	// src and dst are cached so a row can be written without re-deriving
-	// them from the flow on every ASDU.
+	x        *extractor
 	src, dst string
+	buf      []byte
 }
+
+// Reassembled implements tcpassembly.Stream. The assembler calls it with
+// in-order, de-duplicated bytes, on the same goroutine that drives the
+// assembler -- so nothing here needs to lock against the extractor.
+func (s *stream) Reassembled(rs []tcpassembly.Reassembly) {
+	for _, r := range rs {
+		if r.Skip != 0 {
+			// Bytes are missing: either the capture began mid-stream (Skip
+			// is -1) or segments were lost. Whatever is buffered cannot be
+			// completed by what follows, and joining the two would fabricate
+			// a frame that was never sent.
+			s.buf = nil
+		}
+		s.buf = append(s.buf, r.Bytes...)
+
+		for {
+			rest := bytes.NewReader(s.buf)
+			before := rest.Len()
+			apdu, err := cs104.ReadAPDU(rest)
+			if err != nil {
+				break // incomplete: wait for the next Reassembly
+			}
+			s.buf = s.buf[before-rest.Len():]
+			s.x.apdus++
+			s.x.handleAPDU(apdu, s.src, s.dst, r.Seen)
+		}
+
+		if len(s.buf) > maxStreamBuffer {
+			s.buf = nil
+		}
+	}
+}
+
+// ReassemblyComplete implements tcpassembly.Stream. A trailing partial frame
+// is not an error: captures routinely stop mid-conversation.
+func (s *stream) ReassemblyComplete() { s.buf = nil }
 
 type extractor struct {
 	params      *asdu.Params
@@ -169,7 +211,6 @@ type extractor struct {
 	timeFmt     string
 	perIOA      bool
 	csv         *csv.Writer
-	streams     map[streamKey]*stream
 
 	packets, apdus, asdus, rows, filtered, undecodable int
 }
@@ -186,16 +227,18 @@ func (x *extractor) run(path string) error {
 		return err
 	}
 
+	assembler := tcpassembly.NewAssembler(tcpassembly.NewStreamPool(&streamFactory{x: x}))
+
 	for {
 		data, ci, err := source.ReadPacketData()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
 			// A truncated final packet is common in captures cut short; it
 			// is not a reason to discard everything already extracted.
 			log.Printf("stopping early: %v", err)
-			return nil
+			break
 		}
 		x.packets++
 
@@ -203,8 +246,24 @@ func (x *extractor) run(path string) error {
 			Lazy:   true,
 			NoCopy: true,
 		})
-		x.handlePacket(packet, ci.Timestamp)
+		netLayer := packet.NetworkLayer()
+		if netLayer == nil {
+			continue // not IP: ARP, LLDP, and so on
+		}
+		tcp, ok := packet.Layer(layers.LayerTypeTCP).(*layers.TCP)
+		if !ok {
+			continue
+		}
+		if x.port != 0 && int(tcp.SrcPort) != x.port && int(tcp.DstPort) != x.port {
+			continue
+		}
+		assembler.AssembleWithTimestamp(netLayer.NetworkFlow(), tcp, ci.Timestamp)
 	}
+
+	// Push through anything still held waiting for a gap to be filled: at end
+	// of capture it never will be.
+	assembler.FlushAll()
+	return nil
 }
 
 // packetReader is the intersection of pcapgo's classic and pcapng readers.
@@ -249,65 +308,7 @@ type ngReader struct{ *pcapgo.NgReader }
 
 func (r *ngReader) LinkType() layers.LinkType { return r.NgReader.LinkType() }
 
-func (x *extractor) handlePacket(packet gopacket.Packet, ts time.Time) {
-	netLayer := packet.NetworkLayer()
-	if netLayer == nil {
-		return // not IP: ARP, LLDP, and so on
-	}
-	tcpLayer := packet.Layer(layers.LayerTypeTCP)
-	if tcpLayer == nil {
-		return
-	}
-	tcp, _ := tcpLayer.(*layers.TCP)
-	if len(tcp.Payload) == 0 {
-		return // pure ACK, or a handshake/teardown segment
-	}
-	if x.port != 0 && int(tcp.SrcPort) != x.port && int(tcp.DstPort) != x.port {
-		return
-	}
-
-	key := streamKey{net: netLayer.NetworkFlow(), transport: tcp.TransportFlow()}
-	s := x.streams[key]
-	if s == nil {
-		src, dst := netLayer.NetworkFlow().Endpoints()
-		s = &stream{src: src.String(), dst: dst.String()}
-		x.streams[key] = s
-	}
-	s.buf = append(s.buf, tcp.Payload...)
-
-	for _, apdu := range s.frames() {
-		x.apdus++
-		x.handleAPDU(apdu, s, ts)
-	}
-}
-
-// frames pulls every complete APDU out of the buffered stream, leaving any
-// partial trailing frame for the next segment to complete.
-func (s *stream) frames() [][]byte {
-	var out [][]byte
-	for {
-		r := bytes.NewReader(s.buf)
-		before := r.Len()
-		apdu, err := cs104.ReadAPDU(r)
-		if err != nil {
-			// Out of data mid-frame. Keep the buffer as it stands: the next
-			// segment appends to it and the same scan runs again, which is
-			// why this must not consume on failure.
-			break
-		}
-		s.buf = s.buf[before-r.Len():]
-		out = append(out, apdu)
-	}
-
-	if len(s.buf) > maxStreamBuffer {
-		// Not IEC 104, or its beginning was never captured. Either way these
-		// bytes will not resolve into a frame.
-		s.buf = nil
-	}
-	return out
-}
-
-func (x *extractor) handleAPDU(apdu []byte, s *stream, ts time.Time) {
+func (x *extractor) handleAPDU(apdu []byte, src, dst string, ts time.Time) {
 	apci, payload, err := cs104.ParseAPCI(apdu)
 	if err != nil {
 		x.undecodable++
@@ -348,13 +349,13 @@ func (x *extractor) handleAPDU(apdu []byte, s *stream, ts time.Time) {
 
 	if x.perIOA {
 		for _, ioa := range ioas {
-			x.writeRow([]string{when, s.src, s.dst, typeID, addr, strconv.FormatUint(uint64(ioa), 10)})
+			x.writeRow([]string{when, src, dst, typeID, addr, strconv.FormatUint(uint64(ioa), 10)})
 		}
 		return
 	}
 
 	row := make([]string, 0, 5+len(ioas))
-	row = append(row, when, s.src, s.dst, typeID, addr)
+	row = append(row, when, src, dst, typeID, addr)
 	for _, ioa := range ioas {
 		row = append(row, strconv.FormatUint(uint64(ioa), 10))
 	}

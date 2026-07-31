@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcapgo"
+	"github.com/gopacket/gopacket/tcpassembly"
 	"github.com/thinkgos/go-iecp5/asdu"
 )
 
@@ -161,7 +163,6 @@ func runExtractor(t *testing.T, path string, configure func(*extractor)) [][]str
 		port:    2404,
 		timeFmt: time.RFC3339Nano,
 		csv:     w,
-		streams: make(map[streamKey]*stream),
 	}
 	if configure != nil {
 		configure(x)
@@ -297,14 +298,37 @@ func TestExtract_OneIOAPerRow(t *testing.T) {
 // A non-104 flow must not accumulate without bound while waiting for a frame
 // that will never arrive.
 func TestStream_BufferIsCapped(t *testing.T) {
-	s := &stream{}
+	x := &extractor{params: asdu.ParamsWide, csv: csv.NewWriter(io.Discard)}
+	s := &stream{x: x}
 	// No 0x68 anywhere, so nothing ever frames.
-	s.buf = bytes.Repeat([]byte{0xff}, maxStreamBuffer+1)
-	if frames := s.frames(); len(frames) != 0 {
-		t.Fatalf("got %d frames from garbage", len(frames))
+	s.Reassembled([]tcpassembly.Reassembly{
+		{Bytes: bytes.Repeat([]byte{0xff}, maxStreamBuffer+1), Seen: time.Now()},
+	})
+	if x.rows != 0 {
+		t.Fatalf("garbage produced %d rows", x.rows)
 	}
 	if len(s.buf) != 0 {
 		t.Fatalf("buffer retained %d bytes past the %d cap", len(s.buf), maxStreamBuffer)
+	}
+}
+
+// A gap in the capture must not be spliced over: joining the bytes on either
+// side of a hole yields a frame that was never on the wire.
+func TestStream_GapDiscardsThePartialFrame(t *testing.T) {
+	x := &extractor{params: asdu.ParamsWide, csv: csv.NewWriter(io.Discard)}
+	s := &stream{x: x}
+
+	apdu := iFrame(t, 0, 0, singlePointASDU(t, 1, 500))
+	half := len(apdu) / 2
+	whole := iFrame(t, 1, 0, singlePointASDU(t, 1, 501))
+
+	// First half, then a gap, then a complete frame. The complete one must
+	// come through; the severed half must not be joined to it.
+	s.Reassembled([]tcpassembly.Reassembly{{Bytes: apdu[:half], Seen: time.Now()}})
+	s.Reassembled([]tcpassembly.Reassembly{{Bytes: whole, Skip: 12, Seen: time.Now()}})
+
+	if x.rows != 1 {
+		t.Fatalf("got %d rows, want exactly the frame that arrived intact", x.rows)
 	}
 }
 
@@ -330,5 +354,88 @@ func TestParseTypeIDs(t *testing.T) {
 	// an empty set would keep nothing.
 	if m, err := parseTypeIDs("  "); err != nil || m != nil {
 		t.Fatalf("empty -types = (%v, %v), want (nil, nil)", m, err)
+	}
+}
+
+type seg struct {
+	seq     uint32
+	payload []byte
+}
+
+// writeSegs emits segments with explicit sequence numbers, so a test can put
+// them on the wire out of order or repeat one.
+func writeSegs(t *testing.T, path string, segs []seg) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := pcapgo.NewWriter(f)
+	if err := w.WriteFileHeader(65536, layers.LinkTypeEthernet); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC)
+	for i, s := range segs {
+		eth := &layers.Ethernet{
+			SrcMAC: net.HardwareAddr{0, 1, 2, 3, 4, 5}, DstMAC: net.HardwareAddr{6, 7, 8, 9, 10, 11},
+			EthernetType: layers.EthernetTypeIPv4,
+		}
+		ip := &layers.IPv4{Version: 4, IHL: 5, TTL: 64, Protocol: layers.IPProtocolTCP,
+			SrcIP: net.ParseIP("10.0.0.1").To4(), DstIP: net.ParseIP("10.0.0.2").To4()}
+		tcp := &layers.TCP{SrcPort: 2404, DstPort: 50000, Seq: s.seq, ACK: true, PSH: true, Window: 4096}
+		if err := tcp.SetNetworkLayerForChecksum(ip); err != nil {
+			t.Fatal(err)
+		}
+		buf := gopacket.NewSerializeBuffer()
+		if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true},
+			eth, ip, tcp, gopacket.Payload(s.payload)); err != nil {
+			t.Fatal(err)
+		}
+		data := buf.Bytes()
+		if err := w.WritePacket(gopacket.CaptureInfo{
+			Timestamp: base.Add(time.Duration(i) * time.Second), CaptureLength: len(data), Length: len(data),
+		}, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// One APDU split across two segments that arrive out of order -- routine in
+// any real capture.
+func TestOutOfOrderSegments(t *testing.T) {
+	apdu := iFrame(t, 0, 0, singlePointASDU(t, 1, 4242))
+	half := len(apdu) / 2
+
+	path := filepath.Join(t.TempDir(), "ooo.pcap")
+	// Second half on the wire first.
+	writeSegs(t, path, []seg{
+		{seq: 1 + uint32(half), payload: apdu[half:]},
+		{seq: 1, payload: apdu[:half]},
+	})
+
+	rows := runExtractor(t, path, nil)
+	t.Logf("rows: %q", rows)
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1: the APDU was not reassembled", len(rows))
+	}
+	if rows[0][5] != "4242" {
+		t.Fatalf("got IOA %q, want 4242", rows[0][5])
+	}
+}
+
+// A retransmitted segment must not be counted twice.
+func TestRetransmission(t *testing.T) {
+	apdu := iFrame(t, 0, 0, singlePointASDU(t, 1, 77))
+	path := filepath.Join(t.TempDir(), "retx.pcap")
+	writeSegs(t, path, []seg{
+		{seq: 1, payload: apdu},
+		{seq: 1, payload: apdu}, // same bytes, same seq: a retransmit
+	})
+
+	rows := runExtractor(t, path, nil)
+	t.Logf("rows: %q", rows)
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1: the retransmitted segment was counted again", len(rows))
 	}
 }

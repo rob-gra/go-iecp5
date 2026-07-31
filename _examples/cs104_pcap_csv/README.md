@@ -47,16 +47,18 @@ columns.
 
 ## What it handles
 
-**A TCP segment is not an APDU.** One segment routinely carries several (a
-frame is at most 255 bytes, and a busy link fills the MSS), and one APDU may
-be split across two. Payload is accumulated per *direction* of each TCP
-connection and framed out of that byte stream, so neither case loses data.
-Each direction is buffered separately — they are independent byte streams
-with independent frame boundaries.
+**Reassembly is gopacket's job, not this tool's.** A TCP segment is not an
+APDU: one segment routinely carries several (a frame is at most 255 bytes, and
+a busy link fills the MSS), one APDU may be split across two, and on a real
+link segments also arrive out of order and get retransmitted. `tcpassembly`
+hands each direction of each connection its in-order, de-duplicated byte
+stream; this only frames APDUs out of it.
 
-**Captures start mid-stream.** `cs104.ReadAPDU` resynchronizes on the `0x68`
-start byte, so a capture that begins partway through a frame recovers at the
-next one instead of being discarded.
+**Gaps are not spliced over.** A capture may begin mid-stream or lose segments
+in the middle. `tcpassembly` reports that as `Reassembly.Skip`, and the
+partial frame either side of a hole is discarded rather than joined —
+otherwise the output contains a frame that was never on the wire.
+`cs104.ReadAPDU` then resynchronizes on the next `0x68` start byte.
 
 **Sequence ASDUs.** With the SQ bit set, one base address is followed by N
 elements at consecutive addresses; the expansion to `base, base+1, …` happens
