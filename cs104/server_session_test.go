@@ -141,13 +141,13 @@ func TestSrvSession_StartStopDt(t *testing.T) {
 	_, peer := newTestSrvSession(t, stubServerHandler{}, fastTestConfig())
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatalf("got %#v, want StartDtConfirm", head)
 	}
 
-	writeFrame(t, peer, newUFrame(uStopDtActive))
-	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStopDtConfirm {
+	writeFrame(t, peer, newUFrame(UStopDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStopDtConfirm {
 		t.Fatalf("got %#v, want StopDtConfirm", head)
 	}
 }
@@ -156,8 +156,8 @@ func TestSrvSession_IFrameRoundTrip(t *testing.T) {
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, fastTestConfig())
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatalf("expected StartDtConfirm")
 	}
 
@@ -168,11 +168,11 @@ func TestSrvSession_IFrameRoundTrip(t *testing.T) {
 	writeFrame(t, peer, iframe)
 
 	head, body := readFrame(t, peer)
-	i, ok := head.(iAPCI)
+	i, ok := head.(IAPCI)
 	if !ok {
-		t.Fatalf("got %#v, want iAPCI", head)
+		t.Fatalf("got %#v, want IAPCI", head)
 	}
-	if i.sendSN != 0 || i.rcvSN != 1 {
+	if i.SendSN != 0 || i.RcvSN != 1 {
 		t.Fatalf("got %+v, want sendSN=0 rcvSN=1", i)
 	}
 
@@ -212,14 +212,14 @@ func TestSrvSession_TestFrKeepAlive(t *testing.T) {
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	head, _ := readFrame(t, peer) // idle timeout should trigger TestFrActive
-	if u, ok := head.(uAPCI); !ok || u.function != uTestFrActive {
+	if u, ok := head.(UAPCI); !ok || u.Function != UTestFrActive {
 		t.Fatalf("got %#v, want TestFrActive", head)
 	}
-	writeFrame(t, peer, newUFrame(uTestFrConfirm))
+	writeFrame(t, peer, newUFrame(UTestFrConfirm))
 
 	time.Sleep(cfg.SendUnAckTimeout1 + 100*time.Millisecond)
 	if !sess.IsConnected() {
@@ -232,7 +232,7 @@ func TestSrvSession_TestFrTimeout_Disconnects(t *testing.T) {
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
 	_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 	readFrame(t, peer) // TestFrActive - deliberately never confirmed
 
@@ -250,7 +250,7 @@ func TestSrvSession_InvalidAck_Disconnects(t *testing.T) {
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, fastTestConfig())
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	writeFrame(t, peer, newSFrame(5)) // ack for a frame never sent

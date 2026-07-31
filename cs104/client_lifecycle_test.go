@@ -47,8 +47,8 @@ func TestClient_StaleActivationTimerDoesNotOutliveItsConnection(t *testing.T) {
 					if err != nil {
 						return
 					}
-					if u, ok := mustParse(apdu).(uAPCI); ok && u.function == uTestFrActive {
-						if _, err := c.Write(newUFrame(uTestFrConfirm)); err != nil {
+					if u, ok := mustParse(apdu).(UAPCI); ok && u.Function == UTestFrActive {
+						if _, err := c.Write(newUFrame(UTestFrConfirm)); err != nil {
 							return
 						}
 					}

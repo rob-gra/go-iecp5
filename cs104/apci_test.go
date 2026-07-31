@@ -8,10 +8,10 @@ import (
 func TestIAPCI_String(t *testing.T) {
 	tests := []struct {
 		name string
-		this iAPCI
+		this IAPCI
 		want string
 	}{
-		{"iFrame", iAPCI{sendSN: 0x02, rcvSN: 0x02}, "I[sendNO: 2, recvNO: 2]"},
+		{"iFrame", IAPCI{SendSN: 0x02, RcvSN: 0x02}, "I[sendNO: 2, recvNO: 2]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -24,10 +24,10 @@ func TestIAPCI_String(t *testing.T) {
 func TestSAPCI_String(t *testing.T) {
 	tests := []struct {
 		name string
-		this sAPCI
+		this SAPCI
 		want string
 	}{
-		{"sFrame", sAPCI{rcvSN: 123}, "S[recvNO: 123]"},
+		{"sFrame", SAPCI{RcvSN: 123}, "S[recvNO: 123]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,10 +40,10 @@ func TestSAPCI_String(t *testing.T) {
 func TestUAPCI_String(t *testing.T) {
 	tests := []struct {
 		name string
-		this uAPCI
+		this UAPCI
 		want string
 	}{
-		{"uFrame", uAPCI{function: uStartDtActive}, "U[function: StartDtActive]"},
+		{"uFrame", UAPCI{Function: UStartDtActive}, "U[function: StartDtActive]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestUAPCI_String(t *testing.T) {
 func Test_newIFrame(t *testing.T) {
 	type args struct {
 		asdu   []byte
-		sendSN uint16
+		SendSN uint16
 		RcvSN  uint16
 	}
 	tests := []struct {
@@ -81,7 +81,7 @@ func Test_newIFrame(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := newIFrame(tt.args.sendSN, tt.args.RcvSN, tt.args.asdu)
+			got, err := newIFrame(tt.args.SendSN, tt.args.RcvSN, tt.args.asdu)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("newIFrame() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -122,7 +122,7 @@ func Test_newUFrame(t *testing.T) {
 		args args
 		want []byte
 	}{
-		{"", args{uStopDtActive}, []byte{startFrame, 0x04, 0x13, 0x00, 0x00, 0x00}},
+		{"", args{UStopDtActive}, []byte{startFrame, 0x04, 0x13, 0x00, 0x00, 0x00}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,21 +144,21 @@ func Test_parse(t *testing.T) {
 		want1 []byte
 	}{
 		{
-			"iAPCI",
+			"IAPCI",
 			args{[]byte{startFrame, 0x04, 0x02, 0x00, 0x03, 0x00}},
-			iAPCI{sendSN: 0x01, rcvSN: 0x01},
+			IAPCI{SendSN: 0x01, RcvSN: 0x01},
 			[]byte{},
 		},
 		{
-			"sAPCI",
+			"SAPCI",
 			args{[]byte{startFrame, 0x04, 0x01, 0x00, 0x02, 0x00}},
-			sAPCI{rcvSN: 0x01},
+			SAPCI{RcvSN: 0x01},
 			[]byte{},
 		},
 		{
-			"uAPCI",
+			"UAPCI",
 			args{[]byte{startFrame, 0x04, 0x07, 0x00, 0x00, 0x00}},
-			uAPCI{uStartDtActive},
+			UAPCI{UStartDtActive},
 			[]byte{},
 		},
 	}

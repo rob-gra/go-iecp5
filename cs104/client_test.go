@@ -81,11 +81,11 @@ func TestClient_StartDtConfirmActivates(t *testing.T) {
 
 	c.SendStartDt()
 	head, _ := readFrame(t, peer)
-	if u, ok := head.(uAPCI); !ok || u.function != uStartDtActive {
+	if u, ok := head.(UAPCI); !ok || u.Function != UStartDtActive {
 		t.Fatalf("got %#v, want StartDtActive", head)
 	}
 
-	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	writeFrame(t, peer, newUFrame(UStartDtConfirm))
 	waitFor(t, time.Second, c.IsActive)
 }
 
@@ -95,16 +95,16 @@ func TestClient_StopDtConfirmDeactivates(t *testing.T) {
 
 	c.SendStartDt()
 	readFrame(t, peer)
-	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	writeFrame(t, peer, newUFrame(UStartDtConfirm))
 	waitFor(t, time.Second, c.IsActive)
 
 	c.SendStopDt()
 	head, _ := readFrame(t, peer)
-	if u, ok := head.(uAPCI); !ok || u.function != uStopDtActive {
+	if u, ok := head.(UAPCI); !ok || u.Function != UStopDtActive {
 		t.Fatalf("got %#v, want StopDtActive", head)
 	}
 
-	writeFrame(t, peer, newUFrame(uStopDtConfirm))
+	writeFrame(t, peer, newUFrame(UStopDtConfirm))
 	waitFor(t, time.Second, func() bool { return !c.IsActive() })
 }
 
@@ -127,9 +127,9 @@ func TestClient_RespondsToTestFrActive(t *testing.T) {
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 	_ = c
 
-	writeFrame(t, peer, newUFrame(uTestFrActive))
+	writeFrame(t, peer, newUFrame(UTestFrActive))
 	head, _ := readFrame(t, peer)
-	if u, ok := head.(uAPCI); !ok || u.function != uTestFrConfirm {
+	if u, ok := head.(UAPCI); !ok || u.Function != UTestFrConfirm {
 		t.Fatalf("got %#v, want TestFrConfirm", head)
 	}
 }
@@ -160,14 +160,14 @@ func TestClient_SendRequiresConnectedAndActive(t *testing.T) {
 
 	c.SendStartDt()
 	readFrame(t, peer)
-	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	writeFrame(t, peer, newUFrame(UStartDtConfirm))
 	waitFor(t, time.Second, c.IsActive)
 
 	if err := c.Send(u); err != nil {
 		t.Fatalf("Send() once active = %v, want nil", err)
 	}
 	head, _ := readFrame(t, peer)
-	if _, ok := head.(iAPCI); !ok {
+	if _, ok := head.(IAPCI); !ok {
 		t.Fatalf("got %#v, want the queued ASDU as an I-frame", head)
 	}
 }
@@ -180,7 +180,7 @@ func TestClient_IFrameRoundTrip(t *testing.T) {
 
 	c.SendStartDt()
 	readFrame(t, peer)
-	writeFrame(t, peer, newUFrame(uStartDtConfirm))
+	writeFrame(t, peer, newUFrame(UStartDtConfirm))
 	waitFor(t, time.Second, c.IsActive)
 
 	if err := c.InterrogationCmd(asdu.CauseOfTransmission{Cause: asdu.Activation},
@@ -189,12 +189,12 @@ func TestClient_IFrameRoundTrip(t *testing.T) {
 	}
 
 	head, _ := readFrame(t, peer)
-	i, ok := head.(iAPCI)
+	i, ok := head.(IAPCI)
 	if !ok {
 		t.Fatalf("got %#v, want an I-frame carrying the interrogation", head)
 	}
-	if i.sendSN != 0 {
-		t.Fatalf("sendSN = %d, want 0 for the first I-frame", i.sendSN)
+	if i.SendSN != 0 {
+		t.Fatalf("sendSN = %d, want 0 for the first I-frame", i.SendSN)
 	}
 
 	// Acknowledge it, then send one the other way.
@@ -207,7 +207,7 @@ func TestClient_IFrameRoundTrip(t *testing.T) {
 
 	// The client must stay up and eventually acknowledge what it received.
 	head, _ = readFrame(t, peer)
-	if s, ok := head.(sAPCI); !ok || s.rcvSN != 1 {
+	if s, ok := head.(SAPCI); !ok || s.RcvSN != 1 {
 		t.Fatalf("got %#v, want an S-frame acknowledging 1", head)
 	}
 	if !c.IsConnected() {

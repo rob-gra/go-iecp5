@@ -368,7 +368,7 @@ func (sf *connection) sendSFrame(rcvSN uint16) {
 
 func (sf *connection) sendUFrame(which byte) {
 	if sf.debugEnabled() {
-		sf.log.Debug("tx U-frame", "function", uAPCI{which})
+		sf.log.Debug("tx U-frame", "function", UAPCI{which})
 	}
 	sf.sendFrame(newUFrame(which))
 }
@@ -376,7 +376,7 @@ func (sf *connection) sendUFrame(which byte) {
 // trySendUFrame is sendUFrame for callers outside run's goroutine.
 func (sf *connection) trySendUFrame(which byte) {
 	if sf.debugEnabled() {
-		sf.log.Debug("tx U-frame", "function", uAPCI{which})
+		sf.log.Debug("tx U-frame", "function", UAPCI{which})
 	}
 	sf.trySendFrame(newUFrame(which))
 }
@@ -508,7 +508,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			// connected as a standby so we can be reactivated later without
 			// the peer having to reconnect.
 			sf.log.Info("deactivating: superseded by another connection in the redundancy group")
-			sf.sendUFrame(uStopDtConfirm)
+			sf.sendUFrame(UStopDtConfirm)
 			sf.isActive.Store(false)
 
 		case <-sf.sendQueue.Ready():
@@ -548,7 +548,7 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 
 			// t3: the link has been idle, send a TESTFR to prove it is alive.
 			if now.Sub(sf.idleSince) >= sf.config.IdleTimeout3 {
-				sf.sendUFrame(uTestFrActive) // pushes back t3 via sendFrame
+				sf.sendUFrame(UTestFrActive) // pushes back t3 via sendFrame
 				sf.testFrAliveSendSince = time.Now()
 			}
 
@@ -556,28 +556,28 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 			sf.idleSince = time.Now() // any inbound I/S/U frame is activity too
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
-			case sAPCI:
+			case SAPCI:
 				if sf.debugEnabled() {
-					sf.log.Debug("rx S-frame", "rcvSN", head.rcvSN)
+					sf.log.Debug("rx S-frame", "rcvSN", head.RcvSN)
 				}
-				if !sf.updateAckNoOut(head.rcvSN) {
+				if !sf.updateAckNoOut(head.RcvSN) {
 					sf.log.Error("acknowledgement outside the outstanding window, closing",
-						"rcvSN", head.rcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
+						"rcvSN", head.RcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
 					return
 				}
 
-			case iAPCI:
+			case IAPCI:
 				if sf.debugEnabled() {
-					sf.log.Debug("rx I-frame", "sendSN", head.sendSN, "rcvSN", head.rcvSN)
+					sf.log.Debug("rx I-frame", "sendSN", head.SendSN, "rcvSN", head.RcvSN)
 				}
 				if !sf.IsActive() {
 					sf.log.Warn("discarding I-frame: data transfer is stopped")
 					break // discard: data transfer is stopped
 				}
-				if !sf.updateAckNoOut(head.rcvSN) || head.sendSN != sf.seqNoRcv {
+				if !sf.updateAckNoOut(head.RcvSN) || head.SendSN != sf.seqNoRcv {
 					sf.log.Error("I-frame sequence out of step, closing",
-						"sendSN", head.sendSN, "wantSendSN", sf.seqNoRcv,
-						"rcvSN", head.rcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
+						"sendSN", head.SendSN, "wantSendSN", sf.seqNoRcv,
+						"rcvSN", head.RcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
 					return
 				}
 
@@ -596,11 +596,11 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 					sf.ackNoRcv = sf.seqNoRcv
 				}
 
-			case uAPCI:
+			case UAPCI:
 				if sf.debugEnabled() {
 					sf.log.Debug("rx U-frame", "function", head)
 				}
-				sf.role.handleUFrame(head.function)
+				sf.role.handleUFrame(head.Function)
 			}
 		}
 	}

@@ -27,55 +27,61 @@ const (
 	APDUFieldSizeMax = APCICtlFiledSize + asdu.ASDUSizeMax // control field(4) + ASDU
 )
 
-// U-frame control-field functions.
+// U-frame control-field functions, as carried in UAPCI.Function.
 const (
-	uStartDtActive  byte = 4 << iota // STARTDT activation 0x04
-	uStartDtConfirm                  // STARTDT confirmation 0x08
-	uStopDtActive                    // STOPDT activation 0x10
-	uStopDtConfirm                   // STOPDT confirmation 0x20
-	uTestFrActive                    // TESTFR activation 0x40
-	uTestFrConfirm                   // TESTFR confirmation 0x80
+	UStartDtActive  byte = 4 << iota // STARTDT activation 0x04
+	UStartDtConfirm                  // STARTDT confirmation 0x08
+	UStopDtActive                    // STOPDT activation 0x10
+	UStopDtConfirm                   // STOPDT confirmation 0x20
+	UTestFrActive                    // TESTFR activation 0x40
+	UTestFrConfirm                   // TESTFR confirmation 0x80
 )
 
-// iAPCI is an I-frame (information): APCI plus ASDU, carrying numbered
-// information transfer.
-type iAPCI struct {
-	sendSN, rcvSN uint16
+// IAPCI is an I-format APDU's control information (information transfer):
+// APCI plus ASDU, carrying numbered information transfer.
+//
+// The three APCI types are exported, along with their fields, because
+// ParseAPCI hands one back as an any: a caller decoding APDUs from a capture
+// has to type-switch on what it gets, and cannot do that against unexported
+// types.
+type IAPCI struct {
+	SendSN, RcvSN uint16
 }
 
-func (sf iAPCI) String() string {
-	return fmt.Sprintf("I[sendNO: %d, recvNO: %d]", sf.sendSN, sf.rcvSN)
+func (sf IAPCI) String() string {
+	return fmt.Sprintf("I[sendNO: %d, recvNO: %d]", sf.SendSN, sf.RcvSN)
 }
 
-// sAPCI is an S-frame (supervisory): APCI only, acknowledging correct
-// receipt of numbered frames.
-type sAPCI struct {
-	rcvSN uint16
+// SAPCI is an S-format APDU's control information (supervisory): APCI only,
+// acknowledging correct receipt of numbered frames.
+type SAPCI struct {
+	RcvSN uint16
 }
 
-func (sf sAPCI) String() string {
-	return fmt.Sprintf("S[recvNO: %d]", sf.rcvSN)
+func (sf SAPCI) String() string {
+	return fmt.Sprintf("S[recvNO: %d]", sf.RcvSN)
 }
 
-// uAPCI is a U-frame (unnumbered): APCI only, carrying control information.
-type uAPCI struct {
-	function byte // function code, e.g. bit 8 is TESTFR confirmation
+// UAPCI is a U-format APDU's control information (unnumbered): APCI only,
+// carrying control information. Compare Function against the U* constants.
+type UAPCI struct {
+	Function byte // one of UStartDtActive, UStartDtConfirm, ...
 }
 
-func (sf uAPCI) String() string {
+func (sf UAPCI) String() string {
 	var s string
-	switch sf.function {
-	case uStartDtActive:
+	switch sf.Function {
+	case UStartDtActive:
 		s = "StartDtActive"
-	case uStartDtConfirm:
+	case UStartDtConfirm:
 		s = "StartDtConfirm"
-	case uStopDtActive:
+	case UStopDtActive:
 		s = "StopDtActive"
-	case uStopDtConfirm:
+	case UStopDtConfirm:
 		s = "StopDtConfirm"
-	case uTestFrActive:
+	case UTestFrActive:
 		s = "TestFrActive"
-	case uTestFrConfirm:
+	case UTestFrConfirm:
 		s = "TestFrConfirm"
 	default:
 		s = "Unknown"
@@ -119,7 +125,8 @@ type APCI struct {
 	ctr1, ctr2, ctr3, ctr4 byte
 }
 
-// parse returns the frame type, APCI, and remaining data. apdu must be at
+// parse returns the frame type as an IAPCI, SAPCI or UAPCI, plus the
+// remaining data. apdu must be at
 // least 6 bytes (APCICtlFiledSize+2); callers are expected to have already
 // validated the frame length, e.g. via ReadAPDU or recvLoop's own framing.
 // See ParseAPCI for a bounds-checked, exported equivalent suitable for
@@ -127,19 +134,19 @@ type APCI struct {
 func parse(apdu []byte) (any, []byte) {
 	apci := APCI{apdu[0], apdu[1], apdu[2], apdu[3], apdu[4], apdu[5]}
 	if apci.ctr1&0x01 == 0 {
-		return iAPCI{
-			sendSN: uint16(apci.ctr1)>>1 + uint16(apci.ctr2)<<7,
-			rcvSN:  uint16(apci.ctr3)>>1 + uint16(apci.ctr4)<<7,
+		return IAPCI{
+			SendSN: uint16(apci.ctr1)>>1 + uint16(apci.ctr2)<<7,
+			RcvSN:  uint16(apci.ctr3)>>1 + uint16(apci.ctr4)<<7,
 		}, apdu[6:]
 	}
 	if apci.ctr1&0x03 == 0x01 {
-		return sAPCI{
-			rcvSN: uint16(apci.ctr3)>>1 + uint16(apci.ctr4)<<7,
+		return SAPCI{
+			RcvSN: uint16(apci.ctr3)>>1 + uint16(apci.ctr4)<<7,
 		}, apdu[6:]
 	}
 	// apci.ctrl&0x03 == 0x03
-	return uAPCI{
-		function: apci.ctr1 & 0xfc,
+	return UAPCI{
+		Function: apci.ctr1 & 0xfc,
 	}, apdu[6:]
 }
 

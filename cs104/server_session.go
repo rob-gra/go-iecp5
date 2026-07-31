@@ -48,17 +48,17 @@ type SrvSession struct {
 // activations its peer sends; it never issues them itself.
 func (sf *SrvSession) handleUFrame(function byte) {
 	switch function {
-	case uStartDtActive:
-		sf.sendUFrame(uStartDtConfirm)
+	case UStartDtActive:
+		sf.sendUFrame(UStartDtConfirm)
 		if !sf.isActive.Swap(true) && sf.onActivate != nil {
 			sf.onActivate(sf)
 		}
-	case uStopDtActive:
-		sf.sendUFrame(uStopDtConfirm)
+	case UStopDtActive:
+		sf.sendUFrame(UStopDtConfirm)
 		sf.isActive.Store(false)
-	case uTestFrActive:
-		sf.sendUFrame(uTestFrConfirm)
-	case uTestFrConfirm:
+	case UTestFrActive:
+		sf.sendUFrame(UTestFrConfirm)
+	case UTestFrConfirm:
 		sf.testFrAliveSendSince = time.Time{}
 	default:
 		sf.log.Error("ignoring illegal U-frame function", "function", fmt.Sprintf("0x%02x", function))

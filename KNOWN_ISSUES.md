@@ -22,6 +22,8 @@ fix.
 - [x] [Recovering a panicking handler erased the failure](#15-recovering-a-panicking-handler-erased-the-failure) — implemented: named returns on both `dispatchASDU`
 - [x] [`Start` could not report a duplicate start, and lost the monotonic clock](#15b-start-could-not-report-a-duplicate-start-and-activation-timers-lost-the-monotonic-clock) — implemented: `ErrAlreadyStarted`, `atomic.Pointer[time.Time]`
 - [x] [`Server.Send` accepted an ASDU too long to frame](#16-serversend-accepted-an-asdu-too-long-to-frame) — implemented: same length check as `connection.Send`
+- [x] [`ParseAPCI` returned unexported types, so nothing could use it](#17-parseapci-returned-unexported-types-so-nothing-could-use-it) — implemented: `IAPCI`/`SAPCI`/`UAPCI` and the `U*` constants are exported
+- [x] [`TypeID.String` decorated the mnemonic as `TID<...>`](#18-typeidstring-decorated-the-mnemonic-as-tid) — implemented: returns the bare mnemonic
 
 ---
 
@@ -479,3 +481,54 @@ connected session, `Server.Send` returned `nil` and queued it while
 after marshalling, and returns `asdu.ErrLengthOutOfRange`. Covered by
 `TestServer_SendRejectsOverlongASDU`, which asserts both the error and that
 the group queue did not grow.
+
+---
+
+## 17. `ParseAPCI` returned unexported types, so nothing could use it
+
+**Summary**: `ParseAPCI` is documented as the bounds-checked, exported entry
+point for decoding APDUs "from sources other than a live connection, e.g.
+frames extracted from a pcap capture". It returns the APCI as an `any`:
+
+```go
+func ParseAPCI(apdu []byte) (apci any, asduPayload []byte, err error)
+```
+
+The concrete types behind that `any` were `iAPCI`, `sAPCI` and `uAPCI` — all
+unexported. A caller outside the package therefore had no type to assert
+against, and no way to tell an I-format APDU (the only one carrying an ASDU)
+from an S- or U-format one. The U-frame function constants were unexported
+too, so even a caller who reached a `uAPCI` had nothing to compare its
+function byte with.
+
+**Impact**: The function could not perform the task its own documentation
+recommends it for. Writing the pcap example against the public API meant
+reading the I-format bit off the control field by hand — reimplementing, at
+the call site, the classification `ParseAPCI` exists to do.
+
+**Status: implemented.** `IAPCI`, `SAPCI` and `UAPCI` are exported with
+exported fields (`SendSN`, `RcvSN`, `Function`), as are the six U-format
+function constants (`UStartDtActive` … `UTestFrConfirm`). Covered by
+`cs104/apci_external_test.go`, which is in package `cs104_test` on purpose: a
+test compiled into `cs104` reaches unexported identifiers regardless, so only
+an external test can demonstrate the property. `_examples/cs104_pcap_csv` now
+type-switches on `cs104.IAPCI` instead of inspecting the control byte.
+
+---
+
+## 18. `TypeID.String` decorated the mnemonic as `TID<...>`
+
+**Summary**: `TypeID.String()` returned `"TID<M_ME_NC_1>"` rather than
+`"M_ME_NC_1"`.
+
+**Impact**: The decoration reads acceptably in a log line, but `String` is
+what every `%v`, every CSV column and every serialized field gets. Anything
+downstream matching on a type identification had to strip the wrapper first,
+and `Identifier.String()` inherited it too. It is also unidiomatic: a
+`Stringer` on a named integer conventionally returns the name of the value,
+the way `time.Month` returns `"January"`.
+
+**Status: implemented.** Known ids return the bare mnemonic. An id this build
+has no name for returns `"TypeID(200)"` rather than a bare `"200"`, so it
+stays distinguishable from a mnemonic wherever it is recorded — the form
+`stringer` generates for an out-of-range value.

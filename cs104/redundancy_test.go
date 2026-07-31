@@ -117,8 +117,8 @@ func TestServer_SingleRedundancyGroup_ActivatingSupersedesPriorActive(t *testing
 
 	sessA, peerA := newPipeSession(t, srv)
 	_ = peerA.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peerA, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peerA); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peerA, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peerA); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatalf("expected A's StartDtConfirm")
 	}
 	if !sessA.IsActive() {
@@ -127,8 +127,8 @@ func TestServer_SingleRedundancyGroup_ActivatingSupersedesPriorActive(t *testing
 
 	sessB, peerB := newPipeSession(t, srv)
 	_ = peerB.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peerB, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peerB); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peerB, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peerB); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatalf("expected B's StartDtConfirm")
 	}
 	if !sessB.IsActive() {
@@ -140,7 +140,7 @@ func TestServer_SingleRedundancyGroup_ActivatingSupersedesPriorActive(t *testing
 	// IEC 60870-5-104's redundant-connection model its TCP connection must
 	// stay up as a warm standby, not be closed.
 	head, _ := readFrame(t, peerA)
-	if u, ok := head.(uAPCI); !ok || u.function != uStopDtConfirm {
+	if u, ok := head.(UAPCI); !ok || u.Function != UStopDtConfirm {
 		t.Fatalf("got %#v, want an unsolicited StopDtConfirm", head)
 	}
 	if sessA.IsActive() {
@@ -155,8 +155,8 @@ func TestServer_SingleRedundancyGroup_ActivatingSupersedesPriorActive(t *testing
 
 	// A must still be usable as a standby: reactivating it should work
 	// without reconnecting, and that in turn supersedes B.
-	writeFrame(t, peerA, newUFrame(uStartDtActive))
-	if head, _ := readFrame(t, peerA); head.(uAPCI).function != uStartDtConfirm {
+	writeFrame(t, peerA, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peerA); head.(UAPCI).Function != UStartDtConfirm {
 		t.Fatalf("expected A's StartDtConfirm on reactivation")
 	}
 	if !sessA.IsActive() {
@@ -169,12 +169,12 @@ func TestServer_ConnectionIsRedundancyGroup_BothStayActive(t *testing.T) {
 
 	sessA, peerA := newPipeSession(t, srv)
 	_ = peerA.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peerA, newUFrame(uStartDtActive))
+	writeFrame(t, peerA, newUFrame(UStartDtActive))
 	readFrame(t, peerA)
 
 	sessB, peerB := newPipeSession(t, srv)
 	_ = peerB.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peerB, newUFrame(uStartDtActive))
+	writeFrame(t, peerB, newUFrame(UStartDtActive))
 	readFrame(t, peerB)
 
 	time.Sleep(50 * time.Millisecond)

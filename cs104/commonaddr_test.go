@@ -48,7 +48,7 @@ func TestServer_AllowCommonAddrs_RejectsUnownedCA(t *testing.T) {
 
 	sess, peer := newPipeSession(t, srv)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	iframe, err := newIFrame(0, 0, buildTestCommandASDUWithCA(t, 42)) // not in the allow-list
@@ -76,7 +76,7 @@ func TestServer_AllowCommonAddrs_AcceptsOwnedCA(t *testing.T) {
 
 	_, peer := newPipeSession(t, srv)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	iframe, err := newIFrame(0, 0, buildTestCommandASDUWithCA(t, 5)) // in the allow-list
@@ -101,7 +101,7 @@ func TestServer_AllowCommonAddrs_GlobalAlwaysAccepted(t *testing.T) {
 
 	_, peer := newPipeSession(t, srv)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	iframe, err := newIFrame(0, 0, buildTestCommandASDUWithCA(t, asdu.GlobalCommonAddr))
@@ -125,7 +125,7 @@ func TestServer_NoCommonAddrFilter_AcceptsAnyNonInvalidCA(t *testing.T) {
 
 	_, peer := newPipeSession(t, srv)
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFrame(t, peer, newUFrame(uStartDtActive))
+	writeFrame(t, peer, newUFrame(UStartDtActive))
 	readFrame(t, peer) // StartDtConfirm
 
 	iframe, err := newIFrame(0, 0, buildTestCommandASDUWithCA(t, 9999))

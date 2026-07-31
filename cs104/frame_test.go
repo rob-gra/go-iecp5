@@ -7,7 +7,7 @@ import (
 )
 
 func TestReadAPDU_WellFormedFrame(t *testing.T) {
-	want := newUFrame(uStartDtActive)
+	want := newUFrame(UStartDtActive)
 	got, err := ReadAPDU(bytes.NewReader(want))
 	if err != nil {
 		t.Fatalf("ReadAPDU() error = %v", err)
@@ -18,7 +18,7 @@ func TestReadAPDU_WellFormedFrame(t *testing.T) {
 }
 
 func TestReadAPDU_BackToBackFrames(t *testing.T) {
-	f1 := newUFrame(uStartDtActive)
+	f1 := newUFrame(UStartDtActive)
 	f2 := newSFrame(5)
 	f3, err := newIFrame(0, 0, []byte{0x01, 0x02})
 	if err != nil {
@@ -41,7 +41,7 @@ func TestReadAPDU_BackToBackFrames(t *testing.T) {
 }
 
 func TestReadAPDU_SkipsGarbageAndResyncs(t *testing.T) {
-	want := newUFrame(uStartDtActive)
+	want := newUFrame(UStartDtActive)
 
 	tests := []struct {
 		name    string
@@ -71,7 +71,7 @@ func TestReadAPDU_SkipsGarbageAndResyncs(t *testing.T) {
 }
 
 func TestReadAPDU_InvalidLengthByteResyncs(t *testing.T) {
-	want := newUFrame(uStartDtActive)
+	want := newUFrame(UStartDtActive)
 
 	// A start byte immediately followed by a length byte that can't form a
 	// valid frame (too large: claims an APDU bigger than APDUSizeMax) must
@@ -96,7 +96,7 @@ func TestReadAPDU_TruncatedHeaderReturnsError(t *testing.T) {
 }
 
 func TestReadAPDU_TruncatedBodyReturnsError(t *testing.T) {
-	full := newUFrame(uStartDtActive)
+	full := newUFrame(UStartDtActive)
 	_, err := ReadAPDU(bytes.NewReader(full[:len(full)-1]))
 	if err == nil {
 		t.Fatal("ReadAPDU() error = nil, want an error for a truncated body")
@@ -118,14 +118,14 @@ func TestParseAPCI_TooShortReturnsError(t *testing.T) {
 }
 
 func TestParseAPCI_DelegatesToParse(t *testing.T) {
-	frame := newUFrame(uStartDtActive)
+	frame := newUFrame(UStartDtActive)
 	apci, asduPayload, err := ParseAPCI(frame)
 	if err != nil {
 		t.Fatalf("ParseAPCI() error = %v", err)
 	}
-	u, ok := apci.(uAPCI)
-	if !ok || u.function != uStartDtActive {
-		t.Fatalf("ParseAPCI() apci = %#v, want uAPCI{function: StartDtActive}", apci)
+	u, ok := apci.(UAPCI)
+	if !ok || u.Function != UStartDtActive {
+		t.Fatalf("ParseAPCI() apci = %#v, want UAPCI{Function: StartDtActive}", apci)
 	}
 	if len(asduPayload) != 0 {
 		t.Fatalf("ParseAPCI() asduPayload = % x, want empty (U-frames carry no ASDU)", asduPayload)
