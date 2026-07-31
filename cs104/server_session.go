@@ -49,13 +49,38 @@ type SrvSession struct {
 func (sf *SrvSession) handleUFrame(function byte) {
 	switch function {
 	case UStartDtActive:
+		// A peer that restarts data transfer is no longer waiting to be told
+		// it stopped; releasing the withheld confirmation now would answer a
+		// request it has already moved on from.
+		sf.stopDtPending = false
 		sf.sendUFrame(UStartDtConfirm)
 		if !sf.isActive.Swap(true) && sf.onActivate != nil {
 			sf.onActivate(sf)
 		}
 	case UStopDtActive:
-		sf.sendUFrame(UStopDtConfirm)
+		// Data transfer stops at once, but the confirmation may have to wait.
 		sf.isActive.Store(false)
+
+		// Acknowledge what has been received but not yet confirmed. The w
+		// window and t₂ would get to it eventually, but the peer is entitled
+		// to see the connection settle promptly once it has asked it to stop,
+		// and t₂ can be seconds away. lib60870 sends this S-frame here too.
+		if sf.ackNoRcv != sf.seqNoRcv {
+			sf.sendSFrame(sf.seqNoRcv)
+			sf.ackNoRcv = sf.seqNoRcv
+		}
+
+		// Withhold the confirmation while I-frames this end sent are still
+		// unacknowledged: it would tell the peer the connection is quiesced
+		// when it is not. confirmStopDtIfSettled releases it once the peer's
+		// acknowledgement arrives.
+		if sf.ackNoSend != sf.seqNoSend {
+			sf.stopDtPending = true
+			sf.log.Debug("STOPDT confirmation withheld: I-frames still unacknowledged",
+				"unacked", seqNoCount(sf.ackNoSend, sf.seqNoSend))
+			return
+		}
+		sf.sendUFrame(UStopDtConfirm)
 	case UTestFrActive:
 		sf.sendUFrame(UTestFrConfirm)
 	case UTestFrConfirm:

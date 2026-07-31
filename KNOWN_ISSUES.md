@@ -24,6 +24,10 @@ fix.
 - [x] [`Server.Send` accepted an ASDU too long to frame](#16-serversend-accepted-an-asdu-too-long-to-frame) — implemented: same length check as `connection.Send`
 - [x] [`ParseAPCI` returned unexported types, so nothing could use it](#17-parseapci-returned-unexported-types-so-nothing-could-use-it) — implemented: `IAPCI`/`SAPCI`/`UAPCI` and the `U*` constants are exported
 - [x] [`TypeID.String` decorated the mnemonic as `TID<...>`](#18-typeidstring-decorated-the-mnemonic-as-tid) — implemented: returns the bare mnemonic
+- [x] [An I-frame in the stopped state was discarded without being counted](#19-an-i-frame-in-the-stopped-state-was-discarded-without-being-counted) — implemented: closes the connection
+- [x] [STOPDT was confirmed while sent I-frames were still unacknowledged](#20-stopdt-was-confirmed-while-sent-i-frames-were-still-unacknowledged) — implemented: `confirmStopDtIfSettled`
+- [x] [CP56Time2a encoded Sunday as "not used" and never set the SU bit](#21-cp56time2a-encoded-sunday-as-not-used-and-never-set-the-su-bit) — implemented
+- [ ] [Smaller divergences from lib60870, not addressed](#22-smaller-divergences-from-lib60870-not-addressed)
 
 ---
 
@@ -532,3 +536,132 @@ the way `time.Month` returns `"January"`.
 has no name for returns `"TypeID(200)"` rather than a bare `"200"`, so it
 stays distinguishable from a mnemonic wherever it is recorded — the form
 `stringer` generates for an out-of-range value.
+
+---
+
+## 19. An I-frame in the stopped state was discarded without being counted
+
+**Summary**: `connection.run` dropped an I-frame received while data transfer
+was stopped, logged a warning, and carried on:
+
+```go
+if !sf.IsActive() {
+    sf.log.Warn("discarding I-frame: data transfer is stopped")
+    break // discard: data transfer is stopped
+}
+```
+
+The `break` came before the sequence-number check, so the frame was neither
+validated nor counted.
+
+**Impact**: This is the one option that is wrong whichever way the standard is
+read. Subclass 5.3 permits no user data in the stopped state, so the frame is
+a protocol violation — but discarding it without counting leaves the peer's
+send sequence number one ahead of ours, silently. Nothing reports it at the
+time. The divergence surfaces later, on an unrelated frame after the next
+STARTDT, as `I-frame sequence out of step` — naming the wrong cause, or never
+surfacing at all if the peer stops sending. Verified against the previous
+build: a session received two illegal I-frames in the stopped state, stayed
+connected, and reported nothing.
+
+The two coherent choices are to close (what lib60870's controlled station
+does: *"Received I message while connection not active -> close
+connection"*) or to count and process it (what lib60870's *controlling*
+station does — it validates and acknowledges I-frames regardless of state).
+Doing neither is what produced the silent divergence.
+
+**Status: implemented.** The connection closes, matching the controlled
+station in both the standard's state machine and lib60870.
+
+This reverses `TestSrvSession_IFrameBeforeStartDt_Discarded`, which asserted
+the discard. That test arrived with a sequence-wraparound refactor and pinned
+the behavior that existed rather than deciding it; it is now
+`TestSrvSession_IFrameBeforeStartDt_ClosesConnection`.
+
+---
+
+## 20. STOPDT was confirmed while sent I-frames were still unacknowledged
+
+**Summary**: The controlled station answered STOPDT_ACT immediately:
+
+```go
+case UStopDtActive:
+    sf.sendUFrame(UStopDtConfirm)
+    sf.isActive.Store(false)
+```
+
+regardless of how many I-frames it had sent that the peer had not yet
+acknowledged.
+
+**Impact**: The confirmation says the connection is quiesced. Sending it with
+data still in flight states something untrue, and against a peer that stops
+acknowledging once stopped those frames then sit unconfirmed until t₁ expires
+and takes the connection down — a clean shutdown turning into a timeout
+roughly 15s later. Verified: with two unacknowledged I-frames outstanding, the
+old build answered STOPDT_ACT with STOPDT_CON immediately.
+
+lib60870 models this as a third connection state,
+`M_CON_STATE_UNCONFIRMED_STOPPED` (*"only U, S frames allowed"*), and holds
+the confirmation until the peer's S-frame clears the outstanding messages.
+This library had only the active/inactive pair.
+
+**Status: implemented.** On STOPDT_ACT the session stops data transfer at
+once, acknowledges anything received but not yet confirmed (as lib60870 does,
+rather than leaving it to t₂), and withholds the confirmation if its own sends
+are outstanding. `connection.confirmStopDtIfSettled` releases it when the
+acknowledgement arrives, from either an S-frame or an I-frame's piggybacked
+N(R). A fresh STARTDT clears the withheld confirmation, since the peer has
+moved on from the request. Covered by
+`TestSrvSession_StopDtConfirmWaitsForOutstandingSends`.
+
+---
+
+## 21. CP56Time2a encoded Sunday as "not used" and never set the SU bit
+
+**Summary**: Two defects in the seven-octet time encoder.
+
+Day of week was `byte(ts.Weekday()<<5)`. Go numbers Sunday 0 through Saturday
+6; subclass 7.2.6.18 numbers Monday 1 through Sunday 7 and reserves 0 for "day
+of week not used". Monday through Saturday coincide, so only Sunday was
+affected — encoded as 0, which a conforming receiver reads as "not used".
+
+The SU (summer time) bit was never set. `SetInfoObjTimeZone` accepts any
+location, so a time encoded in a DST-observing zone during summer was marked
+standard time, an hour out to a receiver that honours the bit. SU is also what
+disambiguates the repeated local hour at the autumn transition.
+
+**Impact**: The day-of-week defect degrades rather than corrupts — "not used"
+is a legal value — so it is the milder of the two. The SU defect misstates the
+time by an hour for anyone using a DST zone. lib60870 sidesteps both by
+building from a UTC timestamp and explicitly setting day-of-week to 0.
+
+**Status: implemented.** Sunday encodes as 7, and SU is set from
+`time.Time.IsDST()`. UTC reports false there, so UTC output is unchanged apart
+from Sundays. Covered by `TestCP56Time2a_DayOfWeek` and
+`TestCP56Time2a_SummerTimeBit`; the existing 2019-12-15 vector was a Sunday
+and carried the old value.
+
+Not addressed: `ParseCP56Time2a` ignores SU on the way in. Decoding into the
+same location gives the right instant, but the repeated hour at the autumn
+transition stays ambiguous.
+
+---
+
+## 22. Smaller divergences from lib60870, not addressed
+
+Found while comparing against the C reference implementation. None is a
+correctness defect on its own; all are places where the two libraries would
+behave differently against a hostile or broken peer.
+
+- **An I-frame carrying no ASDU.** lib60870 requires `msgSize >= 7` and closes
+  otherwise. Here the payload fails `UnmarshalBinary`, is logged as
+  `discarding undecodable ASDU`, and the connection continues.
+- **An S-frame in the stopped state.** lib60870 actively closes
+  (*"S message in stopped state -> active close"*). Here it is processed
+  normally.
+- **`ParseCP24Time2a` fills the date from `time.Now()`.** CP24Time2a carries
+  only milliseconds and minutes, so something has to supply the rest, but
+  taking it from the wall clock makes decoding non-deterministic and wrong for
+  a captured or replayed frame.
+- **Year handling in `CP56Time2a`.** `byte(ts.Year() - 2000)` is unguarded, so
+  a year outside 2000-2099 silently encodes as some other year.

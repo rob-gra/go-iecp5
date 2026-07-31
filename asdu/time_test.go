@@ -11,8 +11,12 @@ var (
 	tm0CP56Time2aBytes = []byte{0x01, 0x02, 0x03, 0x04, 0x65, 0x06, 0x13}
 	tm0CP24Time2aBytes = tm0CP56Time2aBytes[:3]
 
+	// 15 Dec 2019 was a Sunday, so octet 5 carries day-of-week 7 (0xe0) with
+	// day-of-month 15 (0x0f). This vector used to read 0x0f -- day-of-week 0,
+	// which the standard defines as "not used" -- because Go numbers Sunday 0
+	// and the encoder passed that through.
 	tm1                = time.Date(2019, 12, 15, 14, 13, 3, 83000000, time.UTC)
-	tm1CP56Time2aBytes = []byte{0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x0c, 0x13}
+	tm1CP56Time2aBytes = []byte{0x0b, 0x0c, 0x0d, 0x0e, 0xef, 0x0c, 0x13}
 	tm1CP24Time2aBytes = tm1CP56Time2aBytes[:3]
 )
 
@@ -172,5 +176,49 @@ func TestParseCP16Time2a(t *testing.T) {
 				t.Errorf("ParseCP16Time2a() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Day of week is 1=Monday through 7=Sunday (subclass 7.2.6.18), not Go's
+// 0=Sunday through 6=Saturday. The two agree for Monday through Saturday,
+// which is why only Sunday ever showed the difference.
+func TestCP56Time2a_DayOfWeek(t *testing.T) {
+	// 4 Mar 2024 was a Monday.
+	for i := 0; i < 7; i++ {
+		day := time.Date(2024, 3, 4+i, 12, 0, 0, 0, time.UTC)
+		want := int(day.Weekday())
+		if want == 0 {
+			want = 7
+		}
+		got := int(CP56Time2a(day, time.UTC)[4] >> 5)
+		if got != want {
+			t.Errorf("%s: day of week = %d, want %d", day.Weekday(), got, want)
+		}
+		if gotDay := int(CP56Time2a(day, time.UTC)[4] & 0x1f); gotDay != day.Day() {
+			t.Errorf("%s: day of month = %d, want %d", day.Weekday(), gotDay, day.Day())
+		}
+	}
+}
+
+// The SU bit marks a summer-time value. Left clear, a summer local time reads
+// as standard time an hour earlier.
+func TestCP56Time2a_SummerTimeBit(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+
+	summer := time.Date(2024, 7, 1, 12, 0, 0, 0, berlin) // CEST, DST in effect
+	winter := time.Date(2024, 1, 1, 12, 0, 0, 0, berlin) // CET, no DST
+
+	if su := CP56Time2a(summer, berlin)[3] & 0x80; su == 0 {
+		t.Error("SU clear for a summer-time value")
+	}
+	if su := CP56Time2a(winter, berlin)[3] & 0x80; su != 0 {
+		t.Error("SU set for a standard-time value")
+	}
+	// UTC never observes DST, so the bit must stay clear there.
+	if su := CP56Time2a(summer, time.UTC)[3] & 0x80; su != 0 {
+		t.Error("SU set when encoding in UTC")
 	}
 }

@@ -68,14 +68,6 @@ See [`_examples`](./_examples) for runnable master (`cs104.Client`), slave
 (`cs104.Server`), dial-out slave (`cs104.ServerSpecial`), and
 redundant-master server setups.
 
-[`_examples/cs104_pcap_csv`](./_examples/cs104_pcap_csv) is an offline tool
-rather than a station: it reads a packet capture, filters by type
-identification and common address, and writes the information objects to CSV.
-It handles the two things a capture has that a live socket does not -- several
-APDUs per TCP segment, and one APDU split across segments -- by framing out of
-a per-direction byte stream. That directory is a separate module so gopacket
-stays out of the library's dependencies.
-
 ## Decoding ASDUs
 
 `Append*` builds an information object; the `Get*` accessors read one back.

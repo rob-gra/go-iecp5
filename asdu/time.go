@@ -18,15 +18,35 @@ import (
 // | RES3(D7--D4)        Months(D3--D0)  | Months = 1-12
 // | RES4(D7)            Year(D6--D0)    | Year = 0-99
 
-// CP56Time2a time to CP56Time2a
+// CP56Time2a encodes a time as CP56Time2a, a seven-octet binary time.
+// See companion standard 101, subclass 7.2.6.18.
 func CP56Time2a(t time.Time, loc *time.Location) []byte {
 	if loc == nil {
 		loc = time.UTC
 	}
 	ts := t.In(loc)
 	msec := ts.Nanosecond()/int(time.Millisecond) + ts.Second()*1000
-	return []byte{byte(msec), byte(msec >> 8), byte(ts.Minute()), byte(ts.Hour()),
-		byte(ts.Weekday()<<5) | byte(ts.Day()), byte(ts.Month()), byte(ts.Year() - 2000)}
+
+	// Go numbers Sunday 0 and Saturday 6; the standard numbers Monday 1
+	// through Sunday 7, reserving 0 for "day of week not used". Writing Go's
+	// value straight through therefore encodes every Sunday as "not used" --
+	// the other six days happen to coincide, which is why it went unnoticed.
+	dayOfWeek := int(ts.Weekday())
+	if dayOfWeek == 0 {
+		dayOfWeek = 7
+	}
+
+	// SU marks the time as summer time. Encoding a summer local time with SU
+	// clear tells the receiver it is standard time, which is an hour out; the
+	// bit is also what disambiguates the repeated hour at the autumn
+	// transition. Zones without DST report false here, so UTC is unaffected.
+	hour := byte(ts.Hour())
+	if ts.IsDST() {
+		hour |= 0x80
+	}
+
+	return []byte{byte(msec), byte(msec >> 8), byte(ts.Minute()), hour,
+		byte(dayOfWeek<<5) | byte(ts.Day()), byte(ts.Month()), byte(ts.Year() - 2000)}
 }
 
 // ParseCP56Time2a decodes CP56Time2a, a seven-octet binary time: it reads 7

@@ -103,6 +103,14 @@ type connection struct {
 	// Only touched from run's goroutine (handleUFrame runs there too).
 	testFrAliveSendSince time.Time
 
+	// stopDtPending records that a STOPDT activation has been accepted but
+	// its confirmation withheld, because I-frames this end sent are still
+	// unacknowledged. Only the controlled station (SrvSession) sets it --
+	// the controlling station issues STOPDT rather than answering it -- but
+	// it lives here because run's goroutine owns the sequence-number state
+	// that decides when the confirmation may go out.
+	stopDtPending bool
+
 	// deactivateCh asks the connection to fall back to inactive, as if it
 	// had processed a STOPDT. Buffered 1 and sent to non-blockingly, so it
 	// is safe to signal from any goroutine and a pending signal need not
@@ -404,6 +412,26 @@ func (sf *connection) sendIFrame(asdu1 []byte) {
 	sf.sendFrame(iframe)
 }
 
+// confirmStopDtIfSettled releases a withheld STOPDT confirmation once every
+// I-frame this end sent has been acknowledged.
+//
+// Subclass 5.3: the confirmation says the connection is quiesced, so sending
+// it while data is still in flight tells the peer something untrue -- and on
+// a peer that stops acknowledging once stopped, those frames then sit
+// unconfirmed until t₁ expires and takes the connection down. lib60870 holds
+// the confirmation back the same way (M_CON_STATE_UNCONFIRMED_STOPPED).
+//
+// Only run's goroutine may call it: it both reads the sequence-number state
+// and sends a frame.
+func (sf *connection) confirmStopDtIfSettled() {
+	if !sf.stopDtPending || sf.ackNoSend != sf.seqNoSend {
+		return
+	}
+	sf.stopDtPending = false
+	sf.log.Debug("outstanding I-frames confirmed, releasing STOPDT confirmation")
+	sf.sendUFrame(UStopDtConfirm)
+}
+
 func (sf *connection) updateAckNoOut(ackNo uint16) (ok bool) {
 	pending, ok := confirmSeqNo(sf.pending, sf.ackNoSend, sf.seqNoSend, ackNo)
 	if !ok {
@@ -422,6 +450,7 @@ func (sf *connection) cleanUp() {
 	sf.seqNoSend = 0
 	sf.pending = nil
 	sf.testFrAliveSendSince = time.Time{}
+	sf.stopDtPending = false
 	sf.role.roleCleanUp()
 	sf.isActive.Store(false)
 	// Client and ServerSpecial reuse one value across reconnects, so re-arm
@@ -565,14 +594,27 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 						"rcvSN", head.RcvSN, "ackNoSend", sf.ackNoSend, "seqNoSend", sf.seqNoSend)
 					return
 				}
+				sf.confirmStopDtIfSettled()
 
 			case IAPCI:
 				if sf.debugEnabled() {
 					sf.log.Debug("rx I-frame", "sendSN", head.SendSN, "rcvSN", head.RcvSN)
 				}
 				if !sf.IsActive() {
-					sf.log.Warn("discarding I-frame: data transfer is stopped")
-					break // discard: data transfer is stopped
+					// Subclass 5.3: no user data is transferred in the
+					// stopped state, so an I-frame here is a protocol
+					// violation. IEC 60870-5-104's controlled station closes
+					// on it, and so does lib60870's.
+					//
+					// Discarding it -- which this used to do -- is worse than
+					// either closing or accepting: the peer counted the frame
+					// against its send sequence number and we did not, so the
+					// two silently diverge. Nothing reports it at the time,
+					// and the mismatch surfaces later as a sequence error on
+					// an unrelated frame, naming the wrong cause.
+					sf.log.Error("I-frame received while data transfer is stopped, closing",
+						"sendSN", head.SendSN)
+					return
 				}
 				if !sf.updateAckNoOut(head.RcvSN) || head.SendSN != sf.seqNoRcv {
 					sf.log.Error("I-frame sequence out of step, closing",
@@ -589,6 +631,8 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 				if sf.ackNoRcv == sf.seqNoRcv { // first unacknowledged
 					unAckRcvSince = time.Now()
 				}
+
+				sf.confirmStopDtIfSettled()
 
 				sf.seqNoRcv = nextSeqNo(sf.seqNoRcv)
 				if seqNoCount(sf.ackNoRcv, sf.seqNoRcv) >= sf.config.RecvUnAckLimitW {

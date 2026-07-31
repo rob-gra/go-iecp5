@@ -189,7 +189,16 @@ func TestSrvSession_IFrameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSrvSession_IFrameBeforeStartDt_Discarded(t *testing.T) {
+// An I-frame before STARTDT closes the connection.
+//
+// This reverses what the session used to do, which was to discard the frame
+// and stay connected. That looked lenient but was the one option that is
+// wrong either way: subclass 5.3 permits no user data in the stopped state,
+// and discarding without counting leaves the peer's send sequence number one
+// ahead of ours, silently, so the divergence surfaces later as a sequence
+// error on an unrelated frame. Either close (what the standard's controlled
+// station does, and lib60870's) or count and process it -- not neither.
+func TestSrvSession_IFrameBeforeStartDt_ClosesConnection(t *testing.T) {
 	sess, peer := newTestSrvSession(t, stubServerHandler{}, fastTestConfig())
 	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
 
@@ -199,12 +208,84 @@ func TestSrvSession_IFrameBeforeStartDt_Discarded(t *testing.T) {
 	}
 	writeFrame(t, peer, iframe)
 
-	// Give the run loop time to process and discard the I-frame; an
-	// I-frame received before STARTDT/STARTDT_CON must not be fatal.
-	time.Sleep(50 * time.Millisecond)
-	if !sess.IsConnected() {
-		t.Fatal("an I-frame received before STARTDT should be discarded, not disconnect the session")
+	waitFor(t, time.Second, func() bool { return !sess.IsConnected() })
+	if sess.IsConnected() {
+		t.Fatal("an I-frame in the stopped state is a protocol violation and must close the connection")
 	}
+}
+
+// STOPDT is confirmed only once the I-frames this end sent have been
+// acknowledged. Confirming earlier says the connection is quiesced while data
+// is still in flight, and against a peer that stops acknowledging once
+// stopped those frames sit unconfirmed until t₁ takes the connection down.
+// lib60870 withholds it the same way (M_CON_STATE_UNCONFIRMED_STOPPED).
+func TestSrvSession_StopDtConfirmWaitsForOutstandingSends(t *testing.T) {
+	cfg := fastTestConfig()
+	// Nothing may time out mid-test; the subject is the confirmation order.
+	cfg.SendUnAckTimeout1 = 5 * time.Second
+	cfg.RecvUnAckTimeout2 = 4 * time.Second
+	cfg.IdleTimeout3 = 10 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+	_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+
+	writeFrame(t, peer, newUFrame(UStartDtActive))
+	if head, _ := readFrame(t, peer); head.(UAPCI).Function != UStartDtConfirm {
+		t.Fatal("expected StartDtConfirm")
+	}
+
+	// Two I-frames out, neither acknowledged.
+	payload := buildTestMonitorASDU(t)
+	sess.enqueue(payload)
+	sess.enqueue(payload)
+	for i := 0; i < 2; i++ {
+		if head, _ := readFrame(t, peer); !isIFrame(head) {
+			t.Fatalf("frame %d: got %#v, want an I-frame", i, head)
+		}
+	}
+
+	writeFrame(t, peer, newUFrame(UStopDtActive))
+
+	// Data transfer stops immediately, but the confirmation must not.
+	waitFor(t, time.Second, func() bool { return !sess.IsActive() })
+
+	_ = peer.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if head, _ := tryReadFrame(t, peer); head != nil {
+		if u, ok := head.(UAPCI); ok && u.Function == UStopDtConfirm {
+			t.Fatal("STOPDT confirmed while this end's I-frames were still unacknowledged")
+		}
+	}
+
+	// Acknowledge both. Now the confirmation may go out.
+	_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+	writeFrame(t, peer, newSFrame(2))
+
+	head, _ := readFrame(t, peer)
+	u, ok := head.(UAPCI)
+	if !ok || u.Function != UStopDtConfirm {
+		t.Fatalf("got %#v, want StopDtConfirm once the outstanding frames were acknowledged", head)
+	}
+}
+
+func isIFrame(head any) bool {
+	_, ok := head.(IAPCI)
+	return ok
+}
+
+// tryReadFrame is readFrame for a caller that expects nothing to arrive: it
+// returns a nil APCI on a read deadline instead of failing the test.
+func tryReadFrame(t *testing.T, conn net.Conn) (any, []byte) {
+	t.Helper()
+
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return nil, nil
+	}
+	body := make([]byte, head[1])
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return nil, nil
+	}
+	return parse(append(head, body...))
 }
 
 func TestSrvSession_TestFrKeepAlive(t *testing.T) {
