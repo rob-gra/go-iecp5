@@ -310,3 +310,63 @@ func TestConnection_SendRejectsOverlongASDU(t *testing.T) {
 		t.Fatal("rejecting an over-long ASDU should leave the connection untouched")
 	}
 }
+
+// TestConnection_KWindowStopsAtK covers the k send window: with k
+// unacknowledged I-frames outstanding, transmission must stop until the peer
+// acknowledges (IEC 60870-5-104, subclass 5.5).
+//
+// The bound used to be "<= k" against the count of frames already
+// outstanding, which permitted one more send on top of it and left k+1
+// unacknowledged -- one past what the standard allows, and enough for a peer
+// enforcing k to tear the link down.
+func TestConnection_KWindowStopsAtK(t *testing.T) {
+	cfg := fastTestConfig()
+	cfg.SendUnAckLimitK = 3
+	// Nothing may time out mid-test: the subject here is the window, not the
+	// timers, and a t₁ teardown would end the connection before the count is
+	// meaningful.
+	cfg.SendUnAckTimeout1 = 10 * time.Second
+	cfg.RecvUnAckTimeout2 = 5 * time.Second
+	cfg.IdleTimeout3 = 20 * time.Second
+
+	sess, peer := newTestSrvSession(t, stubServerHandler{}, cfg)
+
+	writeFrame(t, peer, newUFrame(uStartDtActive))
+	if head, _ := readFrame(t, peer); head.(uAPCI).function != uStartDtConfirm {
+		t.Fatal("expected StartDtConfirm")
+	}
+
+	// Queue well past the window, and never acknowledge any of it.
+	payload := buildTestMonitorASDU(t)
+	for i := 0; i < int(cfg.SendUnAckLimitK)*3; i++ {
+		sess.enqueue(payload)
+	}
+
+	// Count the I-frames that arrive before the session goes quiet.
+	iFrames := 0
+	for {
+		_ = peer.SetReadDeadline(time.Now().Add(timeoutResolution * 3))
+		head := make([]byte, 2)
+		if _, err := peer.Read(head); err != nil {
+			break // gone quiet: the window is closed
+		}
+		body := make([]byte, head[1])
+		if _, err := peer.Read(body); err != nil {
+			break
+		}
+		if _, ok := mustParse(append(head, body...)).(iAPCI); ok {
+			iFrames++
+		}
+	}
+
+	if iFrames != int(cfg.SendUnAckLimitK) {
+		t.Fatalf("sent %d unacknowledged I-frames, want exactly k=%d",
+			iFrames, cfg.SendUnAckLimitK)
+	}
+}
+
+// mustParse is parse for tests that have already read a whole frame.
+func mustParse(frame []byte) any {
+	apci, _ := parse(frame)
+	return apci
+}

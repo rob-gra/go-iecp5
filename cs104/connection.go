@@ -442,7 +442,11 @@ func (sf *connection) run(ctx context.Context, conn net.Conn) {
 	sf.idleSince = time.Now()
 
 	for {
-		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) <= sf.config.SendUnAckLimitK {
+		// Strictly less than k: seqNoCount is the number of I-frames already
+		// outstanding, and sendIFrame below adds one more. Allowing the send
+		// at == k would leave k+1 unacknowledged, one past what subclass 5.5
+		// permits -- enough for a peer that enforces k to drop the link.
+		if sf.IsActive() && seqNoCount(sf.ackNoSend, sf.seqNoSend) < sf.config.SendUnAckLimitK {
 			if o, ok := sf.sendQueue.Pop(); ok {
 				sf.sendIFrame(o) // pushes back t3 via sendFrame
 				continue

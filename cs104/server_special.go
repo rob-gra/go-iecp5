@@ -57,6 +57,7 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 	s.connection.config = &s.option.config
 	s.connection.params = &s.option.params
 	s.role = &s.SrvSession
+	s.option.logRejected(s.Clog)
 	return s
 }
 

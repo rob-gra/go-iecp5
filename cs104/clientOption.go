@@ -6,11 +6,13 @@ package cs104
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/thinkgos/go-iecp5/asdu"
+	"github.com/thinkgos/go-iecp5/clog"
 )
 
 // ClientOption 客户端配置
@@ -22,6 +24,13 @@ type ClientOption struct {
 	reconnectInterval time.Duration // 重连间隔时间
 	TLSConfig         *tls.Config   // tls配置
 	commonAddrFilter  func(asdu.CommonAddr) bool
+	// rejected records settings SetConfig/SetParams refused and replaced
+	// with defaults. A ClientOption has no logger of its own, so the
+	// warnings are held here and emitted by NewClient/NewServerSpecial,
+	// which do -- otherwise a rejected configuration is indistinguishable
+	// from an accepted one, and the resulting behavior (connection cycling,
+	// throughput collapse) gives no hint of its cause.
+	rejected []string
 }
 
 // NewOption with default config and default asdu.ParamsWide params
@@ -40,6 +49,8 @@ func NewOption() *ClientOption {
 // SetConfig set config if config is valid it will use DefaultConfig()
 func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 	if err := cfg.Valid(); err != nil {
+		sf.rejected = append(sf.rejected,
+			fmt.Sprintf("invalid config (%v), falling back to DefaultConfig()", err))
 		sf.config = DefaultConfig()
 	} else {
 		sf.config = cfg
@@ -50,11 +61,21 @@ func (sf *ClientOption) SetConfig(cfg Config) *ClientOption {
 // SetParams set asdu params if params is valid it will use asdu.ParamsWide
 func (sf *ClientOption) SetParams(p *asdu.Params) *ClientOption {
 	if err := p.Valid(); err != nil {
+		sf.rejected = append(sf.rejected,
+			fmt.Sprintf("invalid asdu params (%v), falling back to asdu.ParamsWide", err))
 		sf.params = *asdu.ParamsWide
 	} else {
 		sf.params = *p
 	}
 	return sf
+}
+
+// logRejected reports anything SetConfig/SetParams replaced with defaults,
+// once a logger exists to report it to.
+func (sf *ClientOption) logRejected(log clog.Clog) {
+	for _, msg := range sf.rejected {
+		log.Warn("%s", msg)
+	}
 }
 
 // SetReconnectInterval set tcp  reconnect the host interval when connect failed after try

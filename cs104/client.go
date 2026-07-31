@@ -63,6 +63,7 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 	// which it may reuse or mutate after NewClient returns.
 	c.config = &c.option.config
 	c.params = &c.option.params
+	c.option.logRejected(c.Clog)
 	return c
 }
 
